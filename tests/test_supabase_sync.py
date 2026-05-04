@@ -89,3 +89,38 @@ def test_record_to_md_preserves_chatgpt_source_and_timezone(tmp_path):
 
     assert parsed["source"] == "chatgpt"
     assert parsed["last_active"].endswith("+00:00")
+
+
+async def test_bucket_manager_create_accepts_client_id_source_and_timezone(bucket_mgr):
+    bucket_id = await bucket_mgr.create(
+        content="C 端写入的一条记忆。",
+        name="C端记忆",
+        domain=["同步"],
+        bucket_id="chatgpt_memory_20260504",
+        source="chatgpt",
+        created="2026-05-04T08:00:00+00:00",
+        last_active="2026-05-04T08:00:00+00:00",
+    )
+
+    bucket = await bucket_mgr.get(bucket_id)
+
+    assert bucket_id == "chatgpt_memory_20260504"
+    assert bucket["metadata"]["source"] == "chatgpt"
+    assert bucket["metadata"]["created"].endswith("+00:00")
+
+
+async def test_bucket_manager_update_preserves_client_source(bucket_mgr):
+    bucket_id = await bucket_mgr.create(content="旧内容", name="旧记忆")
+
+    ok = await bucket_mgr.update(
+        bucket_id,
+        content="新内容",
+        source="chatgpt",
+        last_active="2026-05-04T09:00:00+00:00",
+    )
+    bucket = await bucket_mgr.get(bucket_id)
+
+    assert ok is True
+    assert bucket["content"] == "新内容"
+    assert bucket["metadata"]["source"] == "chatgpt"
+    assert bucket["metadata"]["last_active"].endswith("+00:00")

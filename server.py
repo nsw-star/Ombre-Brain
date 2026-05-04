@@ -35,6 +35,9 @@ import sys
 import random
 import logging
 import asyncio
+import hmac
+import re
+from datetime import datetime, timezone
 import httpx
 
 
@@ -57,6 +60,8 @@ config = load_config()
 setup_logging(config.get("log_level", "INFO"))
 logger = logging.getLogger("ombre_brain")
 
+MEMORY_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+
 # --- Initialize core components / 初始化核心组件 ---
 bucket_mgr = BucketManager(config)                  # Bucket manager / 记忆桶管理器
 dehydrator = Dehydrator(config)                      # Dehydrator / 脱水器
@@ -73,6 +78,72 @@ mcp = FastMCP(
     host="0.0.0.0",
     port=8000,
 )
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _memory_write_token() -> str:
+    return (
+        os.environ.get("OMBRE_MEMORY_WRITE_TOKEN")
+        or os.environ.get("OMBRE_GATEWAY_TOKEN")
+        or str(config.get("gateway", {}).get("token") or "")
+    )
+
+
+def _authorized_memory_write(request) -> bool:
+    token = _memory_write_token()
+    if not token:
+        return False
+
+    candidates = []
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        candidates.append(auth.split(" ", 1)[1].strip())
+    for header_name in ("x-ombre-token", "x-api-key"):
+        value = request.headers.get(header_name)
+        if value:
+            candidates.append(value.strip())
+    return any(hmac.compare_digest(candidate, token) for candidate in candidates)
+
+
+def _string_list(value, default: list[str]) -> list[str]:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        items = [item.strip() for item in value.split(",")]
+    elif isinstance(value, list):
+        items = [str(item).strip() for item in value]
+    else:
+        items = [str(value).strip()]
+    return [item for item in items if item] or default
+
+
+def _float_between(value, default: float, low: float = 0.0, high: float = 1.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(low, min(high, number))
+
+
+def _int_between(value, default: int, low: int = 1, high: int = 10) -> int:
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        number = default
+    return max(low, min(high, number))
+
+
+def _bool_value(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 # =============================================================
@@ -976,6 +1047,98 @@ async def dream() -> str:
 # Dashboard API endpoints (for lightweight Web UI)
 # 仪表板 API（轻量 Web UI 用）
 # =============================================================
+@mcp.custom_route("/api/memories", methods=["POST"])
+async def api_create_memory(request):
+    """Create or update one memory bucket from a trusted C-side client."""
+    from starlette.responses import JSONResponse
+
+    if not _memory_write_token():
+        return JSONResponse({"error": "memory write token is not configured"}, status_code=503)
+    if not _authorized_memory_write(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "json body must be an object"}, status_code=400)
+
+    title = str(body.get("title") or body.get("name") or "").strip()
+    content = str(body.get("content") or "").strip()
+    if not title:
+        return JSONResponse({"error": "missing title"}, status_code=400)
+    if not content:
+        return JSONResponse({"error": "missing content"}, status_code=400)
+
+    requested_id = body.get("id")
+    bucket_id = str(requested_id).strip() if requested_id else None
+    if bucket_id and not MEMORY_ID_RE.fullmatch(bucket_id):
+        return JSONResponse({"error": "invalid id"}, status_code=400)
+
+    bucket_type = str(body.get("type") or "dynamic").strip()
+    if bucket_type not in {"dynamic", "permanent", "feel"}:
+        return JSONResponse({"error": "invalid type"}, status_code=400)
+
+    now = _utc_now_iso()
+    domain = _string_list(body.get("domain"), ["未分类"])
+    tags = _string_list(body.get("tags"), [])
+    importance = _int_between(body.get("importance"), 5)
+    valence = _float_between(body.get("valence"), 0.5)
+    arousal = _float_between(body.get("arousal"), 0.5)
+    pinned = _bool_value(body.get("pinned"), False)
+    protected = _bool_value(body.get("protected"), False)
+
+    existing = await bucket_mgr.get(bucket_id) if bucket_id else None
+    if existing:
+        ok = await bucket_mgr.update(
+            bucket_id,
+            content=content,
+            tags=tags,
+            importance=importance,
+            domain=domain,
+            valence=valence,
+            arousal=arousal,
+            name=title,
+            pinned=pinned,
+            source="chatgpt",
+            last_active=str(body.get("last_active") or now),
+        )
+        if not ok:
+            return JSONResponse({"error": "update failed"}, status_code=500)
+        status = "updated"
+    else:
+        bucket_id = await bucket_mgr.create(
+            content=content,
+            tags=tags,
+            importance=importance,
+            domain=domain,
+            valence=valence,
+            arousal=arousal,
+            bucket_type=bucket_type,
+            name=title,
+            pinned=pinned,
+            protected=protected,
+            bucket_id=bucket_id,
+            source="chatgpt",
+            created=str(body.get("created") or now),
+            last_active=str(body.get("last_active") or now),
+        )
+        status = "created"
+
+    if embedding_engine.enabled:
+        embedding_status = "stored" if await embedding_engine.generate_and_store(bucket_id, content) else "failed"
+    else:
+        embedding_status = "disabled"
+
+    return JSONResponse({
+        "status": status,
+        "id": bucket_id,
+        "source": "chatgpt",
+        "embedding": embedding_status,
+    })
+
+
 @mcp.custom_route("/api/buckets", methods=["GET"])
 async def api_buckets(request):
     """List all buckets with metadata (no content for efficiency)."""

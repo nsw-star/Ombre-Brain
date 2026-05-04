@@ -110,6 +110,10 @@ class BucketManager:
         name: str = None,
         pinned: bool = False,
         protected: bool = False,
+        bucket_id: str = None,
+        source: str = None,
+        created: str = None,
+        last_active: str = None,
     ) -> str:
         """
         Create a new memory bucket, return bucket ID.
@@ -119,11 +123,13 @@ class BucketManager:
         Importance is locked to 10 for pinned/protected buckets.
         pinned/protected 桶不参与合并与衰减，importance 强制锁定为 10。
         """
-        bucket_id = generate_bucket_id()
+        bucket_id = bucket_id or generate_bucket_id()
         bucket_name = sanitize_name(name) if name else bucket_id
         domain = domain or ["未分类"]
         tags = tags or []
         linked_content = content  # wikilink injection disabled; LLM adds [[]] via prompt
+        created_at = created or now_iso()
+        last_active_at = last_active or created_at
 
         # --- Pinned/protected buckets: lock importance to 10 ---
         # --- 钉选/保护桶：importance 强制锁定为 10 ---
@@ -140,14 +146,16 @@ class BucketManager:
             "arousal": max(0.0, min(1.0, arousal)),
             "importance": max(1, min(10, importance)),
             "type": bucket_type,
-            "created": now_iso(),
-            "last_active": now_iso(),
+            "created": created_at,
+            "last_active": last_active_at,
             "activation_count": 1,
         }
         if pinned:
             metadata["pinned"] = True
         if protected:
             metadata["protected"] = True
+        if source:
+            metadata["source"] = source
 
         # --- Assemble Markdown file (frontmatter + body) ---
         # --- 组装 Markdown 文件 ---
@@ -278,9 +286,11 @@ class BucketManager:
             post["digested"] = bool(kwargs["digested"])
         if "model_valence" in kwargs:
             post["model_valence"] = max(0.0, min(1.0, float(kwargs["model_valence"])))
+        if "source" in kwargs:
+            post["source"] = str(kwargs["source"])
 
         # --- Auto-refresh activation time / 自动刷新激活时间 ---
-        post["last_active"] = now_iso()
+        post["last_active"] = kwargs.get("last_active") or now_iso()
 
         try:
             with open(file_path, "w", encoding="utf-8") as f:
