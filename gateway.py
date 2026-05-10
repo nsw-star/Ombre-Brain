@@ -449,14 +449,11 @@ class GatewayService:
             )
 
     def _anthropic_request_to_openai(self, payload: dict) -> dict:
-        if payload.get("tools") or payload.get("tool_choice"):
-            raise ValueError("Anthropic tool use is not supported by /v1/messages yet")
-
         messages = payload.get("messages")
         if not isinstance(messages, list) or not messages:
             raise ValueError("messages must be a non-empty list")
 
-        openai_messages: list[dict[str, str]] = []
+        openai_messages: list[dict[str, Any]] = []
         system_text = self._anthropic_content_to_text(payload.get("system"), "system").strip()
         if system_text:
             openai_messages.append({"role": "system", "content": system_text})
@@ -464,14 +461,7 @@ class GatewayService:
         for index, message in enumerate(messages):
             if not isinstance(message, dict):
                 raise ValueError(f"messages[{index}] must be an object")
-            role = str(message.get("role") or "").strip()
-            if role not in {"user", "assistant", "system"}:
-                raise ValueError(f"messages[{index}].role must be user, assistant, or system")
-            content = self._anthropic_content_to_text(
-                message.get("content"),
-                f"messages[{index}].content",
-            )
-            openai_messages.append({"role": role, "content": content})
+            openai_messages.extend(self._anthropic_message_to_openai_messages(message, index))
 
         openai_payload: dict[str, Any] = {
             "model": payload.get("model"),
@@ -489,7 +479,148 @@ class GatewayService:
         elif "stop" in payload:
             openai_payload["stop"] = payload["stop"]
 
+        tools = self._anthropic_tools_to_openai(payload.get("tools"))
+        if tools:
+            openai_payload["tools"] = tools
+
+        tool_choice = self._anthropic_tool_choice_to_openai(payload.get("tool_choice"))
+        if tool_choice is not None:
+            openai_payload["tool_choice"] = tool_choice
+
         return openai_payload
+
+    def _anthropic_message_to_openai_messages(self, message: dict[str, Any], index: int) -> list[dict[str, Any]]:
+        role = str(message.get("role") or "").strip()
+        if role not in {"user", "assistant", "system"}:
+            raise ValueError(f"messages[{index}].role must be user, assistant, or system")
+
+        content = message.get("content")
+        if role == "system":
+            return [{"role": "system", "content": self._anthropic_content_to_text(content, f"messages[{index}].content")}]
+        if isinstance(content, str) or content is None:
+            return [{"role": role, "content": content or ""}]
+        if not isinstance(content, list):
+            raise ValueError(f"messages[{index}].content must be a string or block list")
+
+        if role == "assistant":
+            text_parts: list[str] = []
+            tool_calls: list[dict[str, Any]] = []
+            for block_index, block in enumerate(content):
+                if isinstance(block, str):
+                    text_parts.append(block)
+                    continue
+                if not isinstance(block, dict):
+                    raise ValueError(f"messages[{index}].content[{block_index}] must be an object")
+                block_type = block.get("type")
+                if block_type == "text":
+                    text_parts.append(str(block.get("text") or ""))
+                    continue
+                if block_type == "tool_use":
+                    tool_id = str(block.get("id") or "")
+                    name = str(block.get("name") or "")
+                    if not tool_id or not name:
+                        raise ValueError(f"messages[{index}].content[{block_index}] tool_use requires id and name")
+                    tool_calls.append(
+                        {
+                            "id": tool_id,
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": json.dumps(block.get("input") or {}, ensure_ascii=False),
+                            },
+                        }
+                    )
+                    continue
+                raise ValueError(f"messages[{index}].content[{block_index}] unsupported assistant block type")
+
+            assistant_message: dict[str, Any] = {
+                "role": "assistant",
+                "content": "\n".join(part for part in text_parts if part) or None,
+            }
+            if tool_calls:
+                assistant_message["tool_calls"] = tool_calls
+            return [assistant_message]
+
+        output: list[dict[str, Any]] = []
+        pending_text: list[str] = []
+        for block_index, block in enumerate(content):
+            if isinstance(block, str):
+                pending_text.append(block)
+                continue
+            if not isinstance(block, dict):
+                raise ValueError(f"messages[{index}].content[{block_index}] must be an object")
+            block_type = block.get("type")
+            if block_type == "text":
+                pending_text.append(str(block.get("text") or ""))
+                continue
+            if block_type == "tool_result":
+                if pending_text:
+                    output.append({"role": "user", "content": "\n".join(part for part in pending_text if part)})
+                    pending_text = []
+                tool_use_id = str(block.get("tool_use_id") or "")
+                if not tool_use_id:
+                    raise ValueError(f"messages[{index}].content[{block_index}] tool_result requires tool_use_id")
+                output.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_use_id,
+                        "content": self._anthropic_content_to_text(
+                            block.get("content"),
+                            f"messages[{index}].content[{block_index}].content",
+                        ),
+                    }
+                )
+                continue
+            raise ValueError(f"messages[{index}].content[{block_index}] unsupported user block type")
+
+        if pending_text or not output:
+            output.append({"role": "user", "content": "\n".join(part for part in pending_text if part)})
+        return output
+
+    def _anthropic_tools_to_openai(self, tools: Any) -> list[dict[str, Any]]:
+        if tools is None:
+            return []
+        if not isinstance(tools, list):
+            raise ValueError("tools must be a list")
+        converted = []
+        for index, tool in enumerate(tools):
+            if not isinstance(tool, dict):
+                raise ValueError(f"tools[{index}] must be an object")
+            name = str(tool.get("name") or "")
+            if not name:
+                raise ValueError(f"tools[{index}].name is required")
+            converted.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": str(tool.get("description") or ""),
+                        "parameters": tool.get("input_schema") or {"type": "object", "properties": {}},
+                    },
+                }
+            )
+        return converted
+
+    def _anthropic_tool_choice_to_openai(self, tool_choice: Any) -> Any:
+        if tool_choice is None:
+            return None
+        if isinstance(tool_choice, str):
+            return {"auto": "auto", "any": "required", "none": "none"}.get(tool_choice, tool_choice)
+        if not isinstance(tool_choice, dict):
+            raise ValueError("tool_choice must be a string or object")
+        choice_type = tool_choice.get("type")
+        if choice_type == "auto":
+            return "auto"
+        if choice_type == "any":
+            return "required"
+        if choice_type == "none":
+            return "none"
+        if choice_type == "tool":
+            name = str(tool_choice.get("name") or "")
+            if not name:
+                raise ValueError("tool_choice.name is required when type is tool")
+            return {"type": "function", "function": {"name": name}}
+        return None
 
     def _anthropic_content_to_text(self, content: Any, field_name: str) -> str:
         if content is None:
@@ -527,7 +658,7 @@ class GatewayService:
         if not isinstance(message, dict):
             message = {}
 
-        text = self._coerce_message_text(message.get("content"))
+        content_blocks = self._openai_message_to_anthropic_content(message)
         raw_id = str(body.get("id") or "ombre")
         response_id = raw_id if raw_id.startswith("msg_") else f"msg_{raw_id}"
         finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
@@ -539,7 +670,7 @@ class GatewayService:
                 "type": "message",
                 "role": "assistant",
                 "model": body.get("model") or requested_model,
-                "content": [{"type": "text", "text": text}] if text else [],
+                "content": content_blocks,
                 "stop_reason": self._openai_finish_reason_to_anthropic(finish_reason),
                 "stop_sequence": None,
                 "usage": {
@@ -549,6 +680,46 @@ class GatewayService:
             },
             status_code=upstream_response.status_code,
         )
+
+    def _openai_message_to_anthropic_content(self, message: dict[str, Any]) -> list[dict[str, Any]]:
+        content_blocks: list[dict[str, Any]] = []
+        text = self._coerce_message_text(message.get("content"))
+        if text:
+            content_blocks.append({"type": "text", "text": text})
+
+        tool_calls = message.get("tool_calls")
+        if isinstance(tool_calls, list):
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, dict):
+                    continue
+                function = tool_call.get("function")
+                if not isinstance(function, dict):
+                    continue
+                name = str(function.get("name") or "")
+                if not name:
+                    continue
+                content_blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": str(tool_call.get("id") or f"call_{len(content_blocks)}"),
+                        "name": name,
+                        "input": self._parse_tool_arguments(function.get("arguments")),
+                    }
+                )
+        return content_blocks
+
+    def _parse_tool_arguments(self, raw_arguments: Any) -> Any:
+        if isinstance(raw_arguments, dict):
+            return raw_arguments
+        if raw_arguments in (None, ""):
+            return {}
+        if not isinstance(raw_arguments, str):
+            return {}
+        try:
+            parsed = json.loads(raw_arguments)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
 
     async def _stream_upstream_as_anthropic(
         self,
@@ -587,7 +758,9 @@ class GatewayService:
             message_id = f"msg_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
             usage = {"input_tokens": 0, "output_tokens": 0}
             stop_reason = "end_turn"
-            content_started = False
+            next_block_index = 0
+            text_block_index: int | None = None
+            tool_blocks: dict[int, dict[str, Any]] = {}
 
             try:
                 yield self._anthropic_sse(
@@ -606,15 +779,6 @@ class GatewayService:
                         },
                     },
                 )
-                yield self._anthropic_sse(
-                    "content_block_start",
-                    {
-                        "type": "content_block_start",
-                        "index": 0,
-                        "content_block": {"type": "text", "text": ""},
-                    },
-                )
-                content_started = True
 
                 async for chunk in upstream_response.aiter_bytes():
                     if not chunk:
@@ -630,23 +794,89 @@ class GatewayService:
                             stop_reason = event["stop_reason"]
                             continue
                         if event.get("text"):
+                            if text_block_index is None:
+                                text_block_index = next_block_index
+                                next_block_index += 1
+                                yield self._anthropic_sse(
+                                    "content_block_start",
+                                    {
+                                        "type": "content_block_start",
+                                        "index": text_block_index,
+                                        "content_block": {"type": "text", "text": ""},
+                                    },
+                                )
                             yield self._anthropic_sse(
                                 "content_block_delta",
                                 {
                                     "type": "content_block_delta",
-                                    "index": 0,
+                                    "index": text_block_index,
                                     "delta": {
                                         "type": "text_delta",
                                         "text": event["text"],
                                     },
                                 },
                             )
+                            continue
+                        tool_call = event.get("tool_call")
+                        if isinstance(tool_call, dict):
+                            tool_index = int(tool_call.get("index", 0))
+                            state = tool_blocks.setdefault(
+                                tool_index,
+                                {
+                                    "content_index": None,
+                                    "id": "",
+                                    "name": "",
+                                    "started": False,
+                                },
+                            )
+                            if tool_call.get("id"):
+                                state["id"] = str(tool_call["id"])
+                            if tool_call.get("name"):
+                                state["name"] = str(tool_call["name"])
+                            if not state["started"] and state["name"]:
+                                state["content_index"] = next_block_index
+                                next_block_index += 1
+                                state["started"] = True
+                                yield self._anthropic_sse(
+                                    "content_block_start",
+                                    {
+                                        "type": "content_block_start",
+                                        "index": state["content_index"],
+                                        "content_block": {
+                                            "type": "tool_use",
+                                            "id": state["id"] or f"call_{tool_index}",
+                                            "name": state["name"],
+                                            "input": {},
+                                        },
+                                    },
+                                )
+                            arguments = tool_call.get("arguments")
+                            if state["started"] and arguments:
+                                yield self._anthropic_sse(
+                                    "content_block_delta",
+                                    {
+                                        "type": "content_block_delta",
+                                        "index": state["content_index"],
+                                        "delta": {
+                                            "type": "input_json_delta",
+                                            "partial_json": arguments,
+                                        },
+                                    },
+                                )
 
                 self._consume_stream_capture_chunk(stream_state, b"", final=True)
-                if content_started:
+                if text_block_index is not None:
                     yield self._anthropic_sse(
                         "content_block_stop",
-                        {"type": "content_block_stop", "index": 0},
+                        {"type": "content_block_stop", "index": text_block_index},
+                    )
+                for state in sorted(
+                    (item for item in tool_blocks.values() if item.get("started")),
+                    key=lambda item: int(item["content_index"]),
+                ):
+                    yield self._anthropic_sse(
+                        "content_block_stop",
+                        {"type": "content_block_stop", "index": state["content_index"]},
                     )
                 yield self._anthropic_sse(
                     "message_delta",
@@ -722,8 +952,24 @@ class GatewayService:
                     delta = choice.get("delta")
                     if not isinstance(delta, dict):
                         continue
-                    if delta.get("tool_calls"):
-                        continue
+                    tool_calls = delta.get("tool_calls")
+                    if isinstance(tool_calls, list):
+                        for tool_call in tool_calls:
+                            if not isinstance(tool_call, dict):
+                                continue
+                            function = tool_call.get("function")
+                            if not isinstance(function, dict):
+                                function = {}
+                            events.append(
+                                {
+                                    "tool_call": {
+                                        "index": int(tool_call.get("index") or 0),
+                                        "id": tool_call.get("id"),
+                                        "name": function.get("name"),
+                                        "arguments": function.get("arguments"),
+                                    }
+                                }
+                            )
                     content = delta.get("content")
                     if isinstance(content, str) and content:
                         events.append({"text": content})

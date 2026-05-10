@@ -282,6 +282,125 @@ def test_gateway_defaults_anthropic_session_id(monkeypatch, test_config, bucket_
     assert state_store.get_recent_bucket_ids("xiaoyu-main", 5) == set()
 
 
+def test_gateway_maps_anthropic_tool_use(monkeypatch, test_config, bucket_mgr):
+    monkeypatch.setenv("OMBRE_GATEWAY_TOKEN", "gateway-secret")
+    monkeypatch.setenv("OMBRE_GATEWAY_UPSTREAM_API_KEY", "upstream-secret")
+
+    captured = []
+
+    def upstream_handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-tool",
+                "object": "chat.completion",
+                "model": "qwen3.5-plus",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "read_file",
+                                        "arguments": "{\"path\":\"README.md\"}",
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            },
+        )
+
+    state_store = GatewayStateStore(f"{test_config['buckets_dir']}\\gateway_state.db")
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_handler), timeout=10.0)
+    service = GatewayService(
+        config=_gateway_config(test_config, upstream_default_model="qwen3.5-plus"),
+        bucket_mgr=bucket_mgr,
+        dehydrator=DummyDehydrator(),
+        embedding_engine=DummyEmbeddingEngine(enabled=False),
+        state_store=state_store,
+        persona_engine=DummyPersonaEngine(),
+        http_client=http_client,
+    )
+    app = create_gateway_app(config=test_config, service=service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/messages",
+            headers={"x-api-key": "gateway-secret"},
+            json={
+                "model": "qwen3.5-plus",
+                "messages": [
+                    {"role": "user", "content": "读 README"},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "call_prev",
+                                "name": "read_file",
+                                "input": {"path": "README.md"},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "call_prev",
+                                "content": "README content",
+                            }
+                        ],
+                    },
+                ],
+                "tools": [
+                    {
+                        "name": "read_file",
+                        "description": "Read a file",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        },
+                    }
+                ],
+                "tool_choice": {"type": "auto"},
+                "max_tokens": 128,
+            },
+        )
+
+    assert response.status_code == 200
+    forwarded = captured[0]
+    assert forwarded["tools"][0]["type"] == "function"
+    assert forwarded["tools"][0]["function"]["name"] == "read_file"
+    assert forwarded["tool_choice"] == "auto"
+    assistant = next(message for message in forwarded["messages"] if message["role"] == "assistant")
+    assert assistant["tool_calls"][0]["id"] == "call_prev"
+    assert assistant["tool_calls"][0]["function"]["arguments"] == '{"path": "README.md"}'
+    tool_message = next(message for message in forwarded["messages"] if message["role"] == "tool")
+    assert tool_message == {"role": "tool", "tool_call_id": "call_prev", "content": "README content"}
+
+    body = response.json()
+    assert body["stop_reason"] == "tool_use"
+    assert body["content"] == [
+        {
+            "type": "tool_use",
+            "id": "call_1",
+            "name": "read_file",
+            "input": {"path": "README.md"},
+        }
+    ]
+
+
 def test_gateway_streams_anthropic_messages(monkeypatch, test_config, bucket_mgr):
     monkeypatch.setenv("OMBRE_GATEWAY_TOKEN", "gateway-secret")
     monkeypatch.setenv("OMBRE_GATEWAY_UPSTREAM_API_KEY", "upstream-secret")
@@ -343,6 +462,75 @@ def test_gateway_streams_anthropic_messages(monkeypatch, test_config, bucket_mgr
     assert '"stop_reason": "end_turn"' in body
     assert "event: message_stop" in body
     assert state_store.get_recent_bucket_ids("sess-anthropic", 5) == set()
+
+
+def test_gateway_streams_anthropic_tool_use(monkeypatch, test_config, bucket_mgr):
+    monkeypatch.setenv("OMBRE_GATEWAY_TOKEN", "gateway-secret")
+    monkeypatch.setenv("OMBRE_GATEWAY_UPSTREAM_API_KEY", "upstream-secret")
+
+    captured = []
+
+    def upstream_handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=(
+                b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1",'
+                b'"type":"function","function":{"name":"read_file","arguments":"{\\"path\\""}}]}}]}\n\n'
+                b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+                b'"function":{"arguments":":\\"README.md\\"}"}}]},'
+                b'"finish_reason":"tool_calls"}]}\n\n'
+                b"data: [DONE]\n\n"
+            ),
+        )
+
+    state_store = GatewayStateStore(f"{test_config['buckets_dir']}\\gateway_state.db")
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_handler), timeout=10.0)
+    service = GatewayService(
+        config=_gateway_config(test_config, upstream_default_model="qwen3.5-plus"),
+        bucket_mgr=bucket_mgr,
+        dehydrator=DummyDehydrator(),
+        embedding_engine=DummyEmbeddingEngine(enabled=False),
+        state_store=state_store,
+        persona_engine=DummyPersonaEngine(),
+        http_client=http_client,
+    )
+    app = create_gateway_app(config=test_config, service=service)
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/v1/messages",
+            headers={"x-api-key": "gateway-secret"},
+            json={
+                "model": "qwen3.5-plus",
+                "messages": [{"role": "user", "content": "读 README"}],
+                "tools": [
+                    {
+                        "name": "read_file",
+                        "description": "Read a file",
+                        "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+                    }
+                ],
+                "max_tokens": 128,
+                "stream": True,
+            },
+        ) as response:
+            body = response.read().decode("utf-8")
+
+    assert response.status_code == 200
+    assert captured[0]["stream"] is True
+    assert captured[0]["tools"][0]["function"]["name"] == "read_file"
+    assert "event: content_block_start" in body
+    assert '"type": "tool_use"' in body
+    assert '"id": "call_1"' in body
+    assert '"name": "read_file"' in body
+    assert '"type": "input_json_delta"' in body
+    assert '"partial_json": "{\\"path\\""' in body
+    assert '"partial_json": ":\\"README.md\\"}"' in body
+    assert '"stop_reason": "tool_use"' in body
+    assert "event: message_stop" in body
 
 
 def test_gateway_streams_when_client_requires_stream(monkeypatch, test_config, bucket_mgr):
