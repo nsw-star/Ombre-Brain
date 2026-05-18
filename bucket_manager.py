@@ -30,6 +30,7 @@ import math
 import logging
 import re
 import shutil
+import json
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,6 +62,7 @@ class BucketManager:
         self.dynamic_dir = os.path.join(self.base_dir, "dynamic")
         self.archive_dir = os.path.join(self.base_dir, "archive")
         self.feel_dir = os.path.join(self.base_dir, "feel")
+        self.tombstone_dir = os.path.join(self.base_dir, ".tombstones")
         self.fuzzy_threshold = config.get("matching", {}).get("fuzzy_threshold", 50)
         self.max_results = config.get("matching", {}).get("max_results", 5)
 
@@ -352,13 +354,57 @@ class BucketManager:
             return False
 
         try:
+            tombstone = self._build_tombstone(bucket_id, file_path)
             os.remove(file_path)
+            self._write_tombstone(tombstone)
         except OSError as e:
             logger.error(f"Failed to delete bucket file / 删除桶文件失败: {file_path}: {e}")
             return False
 
         logger.info(f"Deleted bucket / 删除记忆桶: {bucket_id}")
         return True
+
+    def _build_tombstone(self, bucket_id: str, file_path: str) -> dict:
+        deleted_at = now_iso()
+        tombstone = {
+            "id": bucket_id,
+            "title": bucket_id,
+            "type": "archived",
+            "domain": ["deleted"],
+            "tags": ["deleted"],
+            "content": "",
+            "valence": 0.5,
+            "arousal": 0.5,
+            "importance": 1,
+            "pinned": False,
+            "resolved": True,
+            "digested": True,
+            "activation_count": 0,
+            "created": deleted_at,
+            "last_active": deleted_at,
+            "updated_at": deleted_at,
+            "source": "deleted",
+            "deleted_at": deleted_at,
+        }
+        try:
+            post = frontmatter.load(file_path)
+            tombstone.update(
+                {
+                    "title": post.get("name", bucket_id),
+                    "type": post.get("type", "archived"),
+                    "domain": post.get("domain", ["deleted"]) or ["deleted"],
+                    "created": post.get("created", deleted_at),
+                }
+            )
+        except Exception:
+            pass
+        return tombstone
+
+    def _write_tombstone(self, tombstone: dict) -> None:
+        os.makedirs(self.tombstone_dir, exist_ok=True)
+        path = safe_path(self.tombstone_dir, f"{tombstone['id']}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(tombstone, f, ensure_ascii=False, indent=2)
 
     # ---------------------------------------------------------
     # Touch bucket (refresh activation time + increment count)

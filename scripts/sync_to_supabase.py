@@ -9,6 +9,7 @@ Remote records authored by C-side clients must use source="chatgpt".
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -27,12 +28,30 @@ import yaml
 DEFAULT_SUPABASE_URL = "https://nuhbpesfpoywzcxlqfhs.supabase.co"
 DEFAULT_BUCKETS_DIR = "/srv/ombre-brain/buckets"
 TABLE_NAME = "memories"
+TOMBSTONE_DIRNAME = ".tombstones"
+SYNC_FIELDS = (
+    "id",
+    "title",
+    "type",
+    "domain",
+    "tags",
+    "content",
+    "valence",
+    "arousal",
+    "importance",
+    "pinned",
+    "resolved",
+    "digested",
+    "source",
+)
+SUPABASE_FIELDS = SYNC_FIELDS + ("created", "last_active", "updated_at", "activation_count")
 
 
 @dataclass
 class Plan:
     to_push: list[dict[str, Any]]
     to_pull: list[dict[str, Any]]
+    to_delete_local: list[dict[str, Any]]
     conflicts: list[str]
     duplicate_local_ids: dict[str, list[str]]
 
@@ -81,7 +100,31 @@ def ensure_bool(value: Any) -> bool:
 
 
 def public_record(record: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in record.items() if not key.startswith("_")}
+    return {key: record.get(key) for key in SUPABASE_FIELDS if key in record}
+
+
+def is_tombstone(record: dict[str, Any] | None) -> bool:
+    return bool(record) and str(record.get("source") or "") == "deleted"
+
+
+def _stable_value(value: Any) -> Any:
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        return round(value, 6)
+    return value
+
+
+def sync_fingerprint(record: dict[str, Any]) -> str:
+    payload = {field: _stable_value(record.get(field)) for field in SYNC_FIELDS}
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def sync_payload_changed(local: dict[str, Any], remote: dict[str, Any]) -> bool:
+    return sync_fingerprint(local) != sync_fingerprint(remote)
 
 
 def content_time(record: dict[str, Any]) -> datetime:
@@ -139,6 +182,7 @@ def parse_md(path: Path) -> dict[str, Any] | None:
 
 
 def record_to_md(record: dict[str, Any], path: Path) -> None:
+    existing = record.get("_existing_local") or {}
     meta = {
         "id": record["id"],
         "name": record.get("title") or record["id"],
@@ -151,9 +195,14 @@ def record_to_md(record: dict[str, Any], path: Path) -> None:
         "pinned": ensure_bool(record.get("pinned", False)),
         "resolved": ensure_bool(record.get("resolved", False)),
         "digested": ensure_bool(record.get("digested", False)),
-        "activation_count": int(float(record.get("activation_count", 0))),
+        "activation_count": int(float(existing.get("activation_count", record.get("activation_count", 0)))),
         "created": str(record.get("created") or format_time(now_utc())),
-        "last_active": str(record.get("last_active") or record.get("created") or format_time(now_utc())),
+        "last_active": str(
+            existing.get("last_active")
+            or record.get("last_active")
+            or record.get("created")
+            or format_time(now_utc())
+        ),
         "updated_at": str(
             record.get("updated_at")
             or record.get("created")
@@ -168,6 +217,67 @@ def record_to_md(record: dict[str, Any], path: Path) -> None:
     path.write_text(f"---\n{frontmatter_text}\n---\n{content}\n", encoding="utf-8")
 
 
+def tombstone_path(buckets_dir: Path, bucket_id: str) -> Path:
+    return buckets_dir / TOMBSTONE_DIRNAME / f"{bucket_id}.json"
+
+
+def tombstone_record(bucket_id: str, *, title: str = "", deleted_at: str | None = None) -> dict[str, Any]:
+    timestamp = deleted_at or format_time(now_utc())
+    return {
+        "id": bucket_id,
+        "title": title or bucket_id,
+        "type": "archived",
+        "domain": ["deleted"],
+        "tags": ["deleted"],
+        "content": "",
+        "valence": 0.5,
+        "arousal": 0.5,
+        "importance": 1,
+        "pinned": False,
+        "resolved": True,
+        "digested": True,
+        "activation_count": 0,
+        "created": timestamp,
+        "last_active": timestamp,
+        "updated_at": timestamp,
+        "source": "deleted",
+        "_deleted_at": timestamp,
+        "_tombstone": True,
+    }
+
+
+def write_tombstone(record: dict[str, Any], buckets_dir: Path) -> None:
+    path = tombstone_path(buckets_dir, str(record["id"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = dict(record)
+    payload["source"] = "deleted"
+    payload.setdefault("_deleted_at", payload.get("updated_at") or format_time(now_utc()))
+    payload["_tombstone"] = True
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def parse_tombstone(path: Path) -> dict[str, Any] | None:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"WARN tombstone failed: {path}: {exc}", file=sys.stderr)
+        return None
+    bucket_id = str(raw.get("id") or path.stem)
+    record = tombstone_record(
+        bucket_id,
+        title=str(raw.get("title") or raw.get("name") or bucket_id),
+        deleted_at=str(raw.get("_deleted_at") or raw.get("deleted_at") or raw.get("updated_at") or format_time(now_utc())),
+    )
+    for key in SUPABASE_FIELDS:
+        if key in raw:
+            record[key] = raw[key]
+    record["source"] = "deleted"
+    record["_path"] = str(path)
+    record["_tombstone"] = True
+    record["_deleted_at"] = str(raw.get("_deleted_at") or raw.get("deleted_at") or record["updated_at"])
+    return record
+
+
 def collect_local_md(buckets_dir: Path) -> tuple[list[dict[str, Any]], dict[str, list[str]]]:
     records: list[dict[str, Any]] = []
     seen: dict[str, list[str]] = defaultdict(list)
@@ -179,6 +289,18 @@ def collect_local_md(buckets_dir: Path) -> tuple[list[dict[str, Any]], dict[str,
         seen[record["id"]].append(str(path))
     duplicates = {bucket_id: paths for bucket_id, paths in seen.items() if len(paths) > 1}
     return records, duplicates
+
+
+def collect_local_tombstones(buckets_dir: Path) -> list[dict[str, Any]]:
+    tombstones: list[dict[str, Any]] = []
+    root = buckets_dir / TOMBSTONE_DIRNAME
+    if not root.exists():
+        return tombstones
+    for path in sorted(root.glob("*.json")):
+        record = parse_tombstone(path)
+        if record is not None:
+            tombstones.append(record)
+    return tombstones
 
 
 def local_path_for_record(record: dict[str, Any], buckets_dir: Path) -> Path:
@@ -209,16 +331,34 @@ def build_plan(
     duplicate_local_ids: dict[str, list[str]] | None = None,
 ) -> Plan:
     duplicate_local_ids = duplicate_local_ids or {}
-    local_map = {record["id"]: record for record in local_records}
+    local_map = {record["id"]: record for record in local_records if not is_tombstone(record)}
+    local_tombstones = {record["id"]: record for record in local_records if is_tombstone(record)}
     remote_map = {str(record["id"]): record for record in remote_records if record.get("id")}
+    remote_tombstones = {bucket_id: record for bucket_id, record in remote_map.items() if is_tombstone(record)}
     to_push: list[dict[str, Any]] = []
     to_pull: list[dict[str, Any]] = []
+    to_delete_local: list[dict[str, Any]] = []
     conflicts: list[str] = []
 
+    for bucket_id, tombstone in local_tombstones.items():
+        local_file = local_map.get(bucket_id)
+        if local_file is not None:
+            to_delete_local.append(local_file)
+        remote = remote_map.get(bucket_id)
+        if remote is None or not is_tombstone(remote) or content_time(tombstone) > content_time(remote):
+            to_push.append(tombstone)
+
     for bucket_id, local in local_map.items():
+        if bucket_id in remote_tombstones:
+            to_delete_local.append(local)
+            continue
+
         remote = remote_map.get(bucket_id)
         if remote is None:
             to_push.append(local)
+            continue
+
+        if not sync_payload_changed(local, remote):
             continue
 
         local_time = content_time(local)
@@ -233,18 +373,35 @@ def build_plan(
             to_push.append(local)
 
     for bucket_id, remote in remote_map.items():
+        if is_tombstone(remote):
+            local = local_map.get(bucket_id)
+            if local is not None:
+                to_delete_local.append(local)
+            continue
+        if bucket_id in local_tombstones:
+            continue
         if str(remote.get("source") or "") != "chatgpt":
             continue
         local = local_map.get(bucket_id)
         if local is None:
             to_pull.append(remote)
             continue
-        if content_time(remote) > content_time(local):
+        if sync_payload_changed(local, remote) and content_time(remote) > content_time(local):
             to_pull.append(remote)
+
+    seen_delete_paths = set()
+    unique_deletes = []
+    for record in to_delete_local:
+        key = record.get("_path") or record.get("id")
+        if key in seen_delete_paths:
+            continue
+        seen_delete_paths.add(key)
+        unique_deletes.append(record)
 
     return Plan(
         to_push=to_push,
         to_pull=to_pull,
+        to_delete_local=unique_deletes,
         conflicts=conflicts,
         duplicate_local_ids=duplicate_local_ids,
     )
@@ -301,15 +458,34 @@ class SupabaseClient:
 
 def apply_pull(records: list[dict[str, Any]], local_map: dict[str, dict[str, Any]], buckets_dir: Path) -> None:
     for record in records:
-        existing_path = local_map.get(str(record["id"]), {}).get("_path")
+        existing = local_map.get(str(record["id"]), {})
+        existing_path = existing.get("_path")
         path = Path(existing_path) if existing_path else local_path_for_record(record, buckets_dir)
+        record["_existing_local"] = existing
         record_to_md(record, path)
         print(f"  ↓ wrote {path}")
+
+
+def apply_delete_local(records: list[dict[str, Any]], buckets_dir: Path) -> None:
+    for record in records:
+        path_value = record.get("_path")
+        if path_value:
+            path = Path(path_value)
+            if path.exists():
+                path.unlink()
+                print(f"  × deleted {path}")
+        tombstone = tombstone_record(
+            str(record["id"]),
+            title=str(record.get("title") or record.get("name") or record["id"]),
+            deleted_at=record.get("updated_at") or format_time(now_utc()),
+        )
+        write_tombstone(tombstone, buckets_dir)
 
 
 def print_plan(plan: Plan) -> None:
     print(f"Push to Supabase: {len(plan.to_push)}")
     print(f"Pull to local:     {len(plan.to_pull)}")
+    print(f"Delete local:      {len(plan.to_delete_local)}")
     print(f"Conflicts:         {len(plan.conflicts)}")
     print(f"Duplicate local:   {len(plan.duplicate_local_ids)}")
     for label, records in (("push", plan.to_push), ("pull", plan.to_pull)):
@@ -317,6 +493,10 @@ def print_plan(plan: Plan) -> None:
             print(f"  {label}: {record.get('id')} {record.get('title')}")
         if len(records) > 10:
             print(f"  {label}: ... {len(records) - 10} more")
+    for record in plan.to_delete_local[:10]:
+        print(f"  delete-local: {record.get('id')} {record.get('title')}")
+    if len(plan.to_delete_local) > 10:
+        print(f"  delete-local: ... {len(plan.to_delete_local) - 10} more")
     for conflict in plan.conflicts[:10]:
         print(f"  conflict: {conflict}")
     for bucket_id, paths in list(plan.duplicate_local_ids.items())[:10]:
@@ -341,12 +521,14 @@ def main(argv: list[str] | None = None) -> int:
 
     buckets_dir = Path(args.buckets_dir)
     local_records, duplicates = collect_local_md(buckets_dir)
+    local_records.extend(collect_local_tombstones(buckets_dir))
     remote_records = SupabaseClient(args.supabase_url, service_key).get_all()
-    local_map = {record["id"]: record for record in local_records}
+    local_map = {record["id"]: record for record in local_records if not is_tombstone(record)}
     plan = build_plan(local_records, remote_records, duplicates)
 
     if args.direction == "push":
         plan.to_pull = []
+        plan.to_delete_local = []
     elif args.direction == "pull":
         plan.to_push = []
 
@@ -365,6 +547,8 @@ def main(argv: list[str] | None = None) -> int:
     client = SupabaseClient(args.supabase_url, service_key)
     if plan.to_push:
         client.upsert(plan.to_push)
+    if plan.to_delete_local:
+        apply_delete_local(plan.to_delete_local, buckets_dir)
     if plan.to_pull:
         apply_pull(plan.to_pull, local_map, buckets_dir)
     print("Sync complete.")
