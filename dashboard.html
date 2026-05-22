@@ -385,6 +385,11 @@
     white-space: pre-wrap;
     padding-right: 22px;
   }
+  .comment-time {
+    color: var(--text-light);
+    font-size: 11px;
+    margin-bottom: 6px;
+  }
   .comment-form {
     margin-top: 14px;
     display: grid;
@@ -1437,8 +1442,10 @@ async function showDetail(id) {
     var commentsHtml = comments.length
       ? '<div class="detail-comments"><h3>年轮</h3>' + comments.map(function(c) {
           var canDelete = c && c.id && c.author === 'Rain' && c.source === 'dashboard';
+          var commentTime = c.original_feel_created || c.created || '';
           return '<div class="comment-item">' +
             (canDelete ? '<button type="button" class="comment-delete-button" title="删除" aria-label="删除" onclick="deleteBucketComment(\'' + id + '\', \'' + esc(c.id) + '\')">×</button>' : '') +
+            (commentTime ? '<div class="comment-time">' + esc(commentTime) + '</div>' : '') +
             '<div class="comment-body">' + esc(c.content || '') + '</div>' +
           '</div>';
         }).join('') + '</div>'
