@@ -326,7 +326,7 @@ Scopes: 留空
 | `read_bucket` | 精确读取完整 bucket，不刷新 last_active |
 | `hold` | 写单条长期记忆；`whisper=True` 写无源悄悄话；`feel=True` 是旧兼容入口 |
 | `grow` | 长内容摘记；不要把整篇日记默认拆进 Ombre |
-| `comment_bucket` | 年轮主入口：给旧记忆追加 AI 年轮，作者固定取 `identity.ai_name` |
+| `comment_bucket` | 年轮主入口：给旧记忆追加年轮，作者固定取 `identity.ai_name` |
 | `trace` | 改 metadata、正文、resolved、delete 等 |
 | `pulse` | 系统状态和桶列表 |
 | `dream` | 自省入口，不替代日记 |
@@ -420,9 +420,9 @@ arousal: float = -1
 }
 ```
 
-用途：给已有 bucket 追加 AI 年轮。MCP 调用不需要传作者，作者固定取 `identity.ai_name`。它会 `touch+1` 源 bucket，刷新源 bucket embedding，不改正文，不把源 bucket 标为 `digested`。
+用途：给已有 bucket 追加年轮。MCP 调用不需要传作者，作者固定取 `identity.ai_name`。它会 `touch+1` 源 bucket，刷新源 bucket embedding，不改正文，不把源 bucket 标为 `digested`。
 
-这是现在推荐的年轮入口。旧写法 `hold(feel=True, source_bucket=...)` 仍可用，但只作为兼容保留，不建议写在教程主路径里。
+这是现在推荐的年轮入口。新调用不要用 `hold(feel=True, source_bucket=...)` 写年轮；那只是旧兼容入口。
 
 #### `hold(...) -> str`
 
@@ -445,8 +445,9 @@ arousal: float = -1
 ```text
 普通记忆：新建→<name> <domain>，并可能附带一条只读相关旧记忆。
 pinned=True：📌钉选→<bucket_id> <domain>。
-feel=True + source_bucket：兼容旧写法，也会返回 年轮→<source_bucket>#<comment_id>；新写法优先用 comment_bucket。
-feel=True 但无 source_bucket：兼容旧用法，转为 whisper，不再建议保留独立孤儿 feel。
+年轮：用 comment_bucket(bucket_id, content)，不要用 hold 写。
+feel=True + source_bucket：仅旧兼容，会返回 年轮→<source_bucket>#<comment_id>；新调用不要使用。
+feel=True 但无 source_bucket：兼容旧用法，转为 whisper；新调用请直接用 whisper=True。
 whisper=True：🫧whisper→<bucket_id>。
 错误：内容为空 / source_bucket 无效 / 源记忆不存在 / 年轮写入失败。
 ```

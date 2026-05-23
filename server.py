@@ -1567,7 +1567,7 @@ async def comment_bucket(
     valence: float = -1,
     arousal: float = -1,
 ) -> dict:
-    """给已有 bucket 追加一条 AI 年轮并 touch+1。用于再次读到旧记忆时写下当下感受；不会改正文，也不会把源记忆标记为 digested。"""
+    """给已有 bucket 追加一条年轮并 touch+1。再次读到旧记忆时的感受/补充请优先用这个工具；不会改正文，也不会把源记忆标记为 digested。"""
     bucket_id = (bucket_id or "").strip()
     if not bucket_id or not MEMORY_ID_RE.fullmatch(bucket_id):
         return {"error": "invalid bucket_id"}
@@ -1726,12 +1726,12 @@ async def hold(
     """写入一条长期记忆卡,不是聊天流水、运维记录或整篇日记。写前应先用 breath/read_bucket 查重。
     普通事实: hold(content="YYYY-MM-DD, 当前用户...", tags="relationship_event 或 project_event", importance=5-7)。
     承诺/待办: tags 传 "commitment,todo" 或 "commitment,wish"; content 写清谁答应了什么、何时/什么条件下要继续。
-    AI 主观喜欢某条旧记忆的原因: 用 hold(content="我喜欢这条记忆的原因是...", feel=True, source_bucket="bucket_id", valence=0.x, arousal=0.x),会作为年轮挂在源记忆下。
+    给旧记忆写年轮/再次阅读感受: 优先用 comment_bucket(bucket_id="...", content="...", kind="feel", valence=0.x, arousal=0.x)。
     无源记忆的碎碎念/悄悄话: 用 hold(content="...", whisper=True, valence=0.x, arousal=0.x),会存为独立 feel 并打 whisper 标签。
     新记忆本身值得偏爱: tags 可传 "haven_favorite,flavor_偏爱"; content 可包含很短的 "### 喜欢它的原因" 段落。
     普通写入会新建 bucket,写 embedding,后台触发 ReflectionEngine 补 tags/confidence/memory_edges,并返回一条只读相关旧记忆。
     pinned=True 只给极少数核心准则,技术进度和运维细节不要钉选。
-    feel=True 且带 source_bucket 时写入源记忆 comments 并 touch+1,不把源记忆标 digested；feel=True 但没有 source_bucket 时兼容旧用法,会转为 whisper。
+    feel=True 且带 source_bucket 是旧兼容入口,新调用不要使用；feel=True 但没有 source_bucket 会转为 whisper。
     """
     await decay_engine.ensure_started()
 
@@ -1764,7 +1764,7 @@ async def hold(
 
     if whisper:
         if source_bucket and source_bucket.strip():
-            return "whisper 不需要 source_bucket；有源记忆的感受请用 feel=True + source_bucket。"
+            return "whisper 不需要 source_bucket；有源记忆的感受请用 comment_bucket。"
         return await create_whisper_bucket()
 
     # --- Feel mode: attach to source bucket as a ring comment when possible ---
@@ -1869,7 +1869,7 @@ async def hold(
 async def grow(content: str) -> str:
     """长内容摘记: 只给已经筛过、包含多个长期记忆点的片段; 不要把整篇日终日记、一天流水或完整情绪过程丢进来。
     content 应该是少量可长期召回的事实/偏好/承诺/项目状态; 服务端会拆成少量 bucket、写 embedding,并后台触发 enrich。
-    如果只有单条明确事实,优先用 hold。若要写 AI 为什么喜欢某条记忆,优先用 hold(feel=True, source_bucket=...) 或 read_bucket 后 trace(content=完整新正文)。
+    如果只有单条明确事实,优先用 hold。若要给旧记忆追加年轮/喜欢原因,优先用 comment_bucket；若要改正文,先 read_bucket 再 trace(content=完整新正文)。
     短内容(<30字)会走 hold-like 快速路径。
     """
     await decay_engine.ensure_started()
@@ -2141,7 +2141,7 @@ async def pulse(include_archive: bool = False) -> str:
 @mcp.tool()
 async def dream() -> str:
     """读取最近普通记忆供 AI 自省,不是日记整理。
-    读后只在真的可以放下时 trace(resolved=1/digested=1),或在产生新的第一人称沉淀/喜欢原因时 hold(feel=True, source_bucket=...)。
+    读后只在真的可以放下时 trace(resolved=1/digested=1),或在产生新的第一人称沉淀/喜欢原因时 comment_bucket(bucket_id, content)。
     不要把 dream 返回内容直接再写成普通 bucket。
     """
     await decay_engine.ensure_started()
@@ -2190,7 +2190,7 @@ async def dream() -> str:
         "- 有什么还没想清楚？\n"
         "- 有什么可以放下了？\n"
         "想完之后：值得放下的用 trace(bucket_id, resolved=1)；\n"
-        "有沉淀的用 hold(content=\"...\", feel=True, source_bucket=\"bucket_id\", valence=你的感受) 写成年轮；有温度时在 content 末尾加 ### affect_anchor 和弦。\n"
+        "有沉淀的用 comment_bucket(bucket_id=\"bucket_id\", content=\"...\", kind=\"feel\", valence=你的感受) 写成年轮；有温度时可在 content 末尾加很短的 ### affect_anchor 和弦。\n"
         "valence 是你对这段记忆的感受，不是事件本身的情绪。\n"
         "没有沉淀就不写，不强迫产出。\n"
     )
