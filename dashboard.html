@@ -2253,12 +2253,16 @@ function drawNetwork(ctx, W, H, data) {
 
   var positions = {};
   var cx = W / 2, cy = H / 2;
+  var marginX = Math.max(64, W * 0.08);
+  var marginY = Math.max(48, H * 0.10);
+  var rx = Math.max(120, (W - marginX * 2) * 0.46);
+  var ry = Math.max(100, (H - marginY * 2) * 0.43);
   nodes.forEach(function(n, i) {
     var angle = (i / nodes.length) * Math.PI * 2;
-    var r = Math.min(W, H) * 0.35;
+    var jitter = ((i * 37) % 23) - 11;
     positions[n.id] = {
-      x: cx + Math.cos(angle) * r + (Math.random() - 0.5) * 50,
-      y: cy + Math.sin(angle) * r + (Math.random() - 0.5) * 50,
+      x: cx + Math.cos(angle) * rx + jitter * 2.5,
+      y: cy + Math.sin(angle) * ry + jitter * 1.8,
     };
   });
 
@@ -2276,7 +2280,7 @@ function drawNetwork(ctx, W, H, data) {
         var a = positions[nodes[i].id], b = positions[nodes[j].id];
         var dx = b.x - a.x, dy = b.y - a.y;
         var dist = Math.max(1, Math.sqrt(dx*dx + dy*dy));
-        var force = 800 / (dist * dist);
+        var force = 1500 / (dist * dist);
         dx = (dx / dist) * force;
         dy = (dy / dist) * force;
         a.x -= dx; a.y -= dy;
@@ -2288,7 +2292,8 @@ function drawNetwork(ctx, W, H, data) {
       if (!a || !b) return;
       var dx = b.x - a.x, dy = b.y - a.y;
       var dist = Math.sqrt(dx*dx + dy*dy);
-      var force = (dist - 100) * 0.01 * (e.similarity || 0.5);
+      var ideal = e.kind === 'memory_edge' ? 180 : 150;
+      var force = (dist - ideal) * 0.006 * (e.similarity || 0.5);
       dx = (dx / Math.max(1,dist)) * force;
       dy = (dy / Math.max(1,dist)) * force;
       a.x += dx; a.y += dy;
@@ -2296,8 +2301,10 @@ function drawNetwork(ctx, W, H, data) {
     });
     nodes.forEach(function(n) {
       var p = positions[n.id];
-      p.x += (cx - p.x) * 0.01;
-      p.y += (cy - p.y) * 0.01;
+      p.x += (cx - p.x) * 0.0025;
+      p.y += (cy - p.y) * 0.0025;
+      p.x = Math.max(marginX, Math.min(W - marginX, p.x));
+      p.y = Math.max(marginY, Math.min(H - marginY, p.y));
     });
   }
 
