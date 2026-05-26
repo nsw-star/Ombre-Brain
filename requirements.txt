@@ -34,4 +34,3 @@ python-multipart>=0.0.9
 
 # 向量相似度计算 (导入模式/聚类)
 numpy>=1.24.0
-scikit-learn>=1.2.0

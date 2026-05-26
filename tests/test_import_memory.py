@@ -1,4 +1,4 @@
-from import_memory import chunk_turns, detect_and_parse
+from import_memory import IMPORT_EXTRACT_PROMPT, ImportEngine, chunk_turns, detect_and_parse
 from utils import count_tokens_approx
 
 
@@ -51,3 +51,46 @@ def test_oversized_markdown_overlap_is_marked_as_context_only():
     assert len(chunks) > 1
     assert "请不要从这里单独提取记忆" in chunks[1]["content"]
     assert chunks[1]["content"].index("[上下文提示]") < chunks[1]["content"].index("[本段内容]")
+
+
+def test_import_prompt_allows_up_to_ten_items_per_chunk():
+    assert "总条目数控制在 0~10 个" in IMPORT_EXTRACT_PROMPT
+    assert "总条目数控制在 0~5 个" not in IMPORT_EXTRACT_PROMPT
+
+
+def test_import_extraction_output_budget_supports_ten_items():
+    class DummyClient:
+        class chat:
+            class completions:
+                @staticmethod
+                async def create(**kwargs):
+                    DummyClient.kwargs = kwargs
+
+                    class Message:
+                        content = "[]"
+
+                    class Choice:
+                        message = Message()
+
+                    class Response:
+                        choices = [Choice()]
+
+                    return Response()
+
+    class DummyDehydrator:
+        api_available = True
+        client = DummyClient()
+        model = "dummy"
+
+    engine = ImportEngine(
+        {"buckets_dir": "buckets"},
+        bucket_mgr=None,
+        dehydrator=DummyDehydrator(),
+        embedding_engine=None,
+    )
+
+    import asyncio
+
+    asyncio.run(engine._extract_memories("hello"))
+
+    assert DummyClient.kwargs["max_tokens"] == 4096
