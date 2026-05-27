@@ -695,6 +695,8 @@ def _select_anchor_buckets(all_buckets: list[dict], limit: int = 2) -> list[dict
 
 
 def _has_favorite_tag(tags: list | set | tuple | None) -> bool:
+    if isinstance(tags, str):
+        tags = [item.strip() for item in tags.split(",")]
     return any(
         tag == "haven_favorite" or tag.startswith("flavor_")
         for tag in {str(item) for item in (tags or [])}
@@ -716,6 +718,136 @@ def _has_favorite_reason(content: str) -> bool:
 
 def _favorite_reason_error() -> str:
     return "标记 favorite memory 需要在正文写明「喜欢它的原因」。"
+
+
+DIRECT_HIT_SECTION_LABELS = {
+    "body": "原文",
+    "moment": "片段",
+    "fact": "事实",
+    "original": "原文",
+    "context": "语境",
+    "feeling": "感受",
+    "followup": "后续",
+    "affect_anchor": "affect_anchor",
+    "favorite_reason": "喜欢它的原因",
+}
+
+
+def _direct_hit_raw_policy() -> dict:
+    raw_cfg = config.get("direct_hit_raw_policy", {})
+    if not isinstance(raw_cfg, dict):
+        raw_cfg = {}
+    return {
+        "enabled": _bool_value(raw_cfg.get("enabled", True), True),
+        "short_raw_tokens": _int_between(raw_cfg.get("short_raw_tokens"), 100, 0, 20000),
+        "importance_min": _float_between(raw_cfg.get("importance_min"), 7.0, 1.0, 10.0),
+        "valence_extreme_delta": _float_between(raw_cfg.get("valence_extreme_delta"), 0.35, 0.0, 0.5),
+    }
+
+
+def _direct_hit_raw_reasons(bucket: dict) -> list[str]:
+    policy = _direct_hit_raw_policy()
+    if not policy["enabled"]:
+        return []
+
+    meta = bucket.get("metadata", {}) if isinstance(bucket.get("metadata"), dict) else {}
+    reasons: list[str] = []
+    raw_text = _bucket_text_for_embedding(bucket)
+    if policy["short_raw_tokens"] > 0 and count_tokens_approx(raw_text) <= policy["short_raw_tokens"]:
+        reasons.append("short")
+
+    try:
+        importance = float(meta.get("importance", 5))
+    except (TypeError, ValueError):
+        importance = 5.0
+    if importance >= policy["importance_min"]:
+        reasons.append("importance")
+
+    try:
+        valence = float(meta.get("valence", 0.5))
+    except (TypeError, ValueError):
+        valence = 0.5
+    if abs(valence - 0.5) >= policy["valence_extreme_delta"]:
+        reasons.append("valence")
+
+    if meta.get("anchor"):
+        reasons.append("anchor")
+    if meta.get("pinned"):
+        reasons.append("pinned")
+    if meta.get("protected"):
+        reasons.append("protected")
+    if _has_favorite_tag(meta.get("tags", [])):
+        reasons.append("favorite")
+    return reasons
+
+
+def _direct_hit_bucket_title(bucket: dict) -> str:
+    meta = bucket.get("metadata", {}) if isinstance(bucket.get("metadata"), dict) else {}
+    title = str(meta.get("name") or bucket.get("name") or "").strip()
+    return title
+
+
+def _format_direct_hit_raw_entry(bucket: dict, prefix: str, reasons: list[str]) -> str:
+    title = _direct_hit_bucket_title(bucket)
+    header = f"{prefix} [direct_hit:raw reason={','.join(reasons)}]"
+    if title:
+        header = f"{header} {title}"
+
+    try:
+        moments = memory_moment_store.upsert_bucket(bucket)
+    except Exception as e:
+        logger.warning(f"Direct hit moment render failed / 直接命中片段渲染失败: {e}")
+        moments = []
+
+    blocks: list[str] = []
+    comments: list[str] = []
+    for moment in moments:
+        text = str(moment.get("text") or "").strip()
+        if not text:
+            continue
+        section = str(moment.get("section") or "body")
+        if section == "comment":
+            meta = moment.get("metadata", {}) if isinstance(moment.get("metadata"), dict) else {}
+            parts = [
+                str(meta.get("comment_kind") or "comment"),
+                str(meta.get("comment_author") or "").strip(),
+                str(moment.get("created_at") or "").strip(),
+            ]
+            label = " ".join(part for part in parts if part)
+            comments.append(f"- [{label}] {text}" if label else f"- {text}")
+            continue
+        label = DIRECT_HIT_SECTION_LABELS.get(section, section)
+        blocks.append(f"{label}:\n{text}")
+
+    if comments:
+        blocks.append("年轮:\n" + "\n".join(comments))
+    if not blocks:
+        raw_text = _bucket_text_for_embedding(bucket)
+        if raw_text:
+            blocks.append("原文:\n" + raw_text)
+
+    return header if not blocks else f"{header}\n" + "\n\n".join(blocks)
+
+
+async def _format_direct_hit_entry(bucket: dict, q_valence: float | None) -> str:
+    prefix = (
+        f"[语义关联] [bucket_id:{bucket['id']}]"
+        if bucket.get("vector_match")
+        else f"[bucket_id:{bucket['id']}]"
+    )
+    reasons = _direct_hit_raw_reasons(bucket)
+    if reasons:
+        return _format_direct_hit_raw_entry(bucket, prefix, reasons)
+
+    clean_meta = {k: v for k, v in bucket["metadata"].items() if k != "tags"}
+    # --- Memory reconstruction: shift displayed valence by current mood ---
+    # --- 记忆重构：根据当前情绪微调展示层 valence（±0.1）---
+    if q_valence is not None and "valence" in clean_meta:
+        original_v = float(clean_meta.get("valence", 0.5))
+        shift = (q_valence - 0.5) * 0.2  # ±0.1 max shift
+        clean_meta["valence"] = max(0.0, min(1.0, original_v + shift))
+    summary = await dehydrator.dehydrate(_bucket_text_for_embedding(bucket), clean_meta)
+    return f"{prefix} {summary}"
 
 
 def _bucket_read_payload(bucket: dict) -> dict:
@@ -2031,18 +2163,7 @@ async def breath(
         if len(direct_results) >= direct_display_limit:
             continue
         try:
-            clean_meta = {k: v for k, v in bucket["metadata"].items() if k != "tags"}
-            # --- Memory reconstruction: shift displayed valence by current mood ---
-            # --- 记忆重构：根据当前情绪微调展示层 valence（±0.1）---
-            if q_valence is not None and "valence" in clean_meta:
-                original_v = float(clean_meta.get("valence", 0.5))
-                shift = (q_valence - 0.5) * 0.2  # ±0.1 max shift
-                clean_meta["valence"] = max(0.0, min(1.0, original_v + shift))
-            summary = await dehydrator.dehydrate(_bucket_text_for_embedding(bucket), clean_meta)
-            if bucket.get("vector_match"):
-                entry = f"[语义关联] [bucket_id:{bucket['id']}] {summary}"
-            else:
-                entry = f"[bucket_id:{bucket['id']}] {summary}"
+            entry = await _format_direct_hit_entry(bucket, q_valence)
             entry_tokens = count_tokens_approx(entry)
             if token_used + entry_tokens > max_tokens:
                 break

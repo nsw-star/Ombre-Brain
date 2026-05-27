@@ -84,6 +84,12 @@ def load_config(config_path: str = None) -> dict:
             "salience_min": 0.2,
             "salience_max": 1.3,
         },
+        "direct_hit_raw_policy": {
+            "enabled": True,
+            "short_raw_tokens": 100,
+            "importance_min": 7,
+            "valence_extreme_delta": 0.35,
+        },
         "gateway": {
             "host": "0.0.0.0",
             "port": 8010,

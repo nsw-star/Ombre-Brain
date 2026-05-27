@@ -34,6 +34,11 @@ class JsonDehydrator:
         )
 
 
+class FixedDehydrator:
+    async def dehydrate(self, content: str, metadata: dict | None = None) -> str:
+        return "COMPRESSED_SUMMARY"
+
+
 class DummyEmbeddingEngine:
     async def search_similar(self, query: str, top_k: int = 10) -> list[tuple[str, float]]:
         return []
@@ -304,6 +309,90 @@ async def test_inspect_moments_indexes_bucket_sections_and_comments(patch_breath
     assert result["moments"][0]["text"] == "小雨说：99。"
     assert result["moments"][2]["metadata"]["comment_kind"] == "feel"
     assert bucket_mgr.touched == []
+
+
+@pytest.mark.asyncio
+async def test_search_short_direct_hit_returns_raw_with_year_ring(patch_breath, monkeypatch):
+    import server
+
+    bucket = _bucket("A", "小雨只打了 99 两个字符。", score=10.0)
+    bucket["metadata"]["comments"] = [
+        {
+            "id": "c1",
+            "created": "2026-05-27T01:00:00+00:00",
+            "author": "Haven",
+            "kind": "feel",
+            "content": "后来再看，99 的味道还在。",
+        }
+    ]
+    bucket_mgr = patch_breath([bucket], search_ids=["A"])
+    monkeypatch.setattr(server, "dehydrator", FixedDehydrator())
+
+    result = await server.breath(query="99", max_tokens=500, include_related=False)
+
+    assert "direct_hit:raw" in result
+    assert "小雨只打了 99 两个字符" in result
+    assert "后来再看，99 的味道还在" in result
+    assert "COMPRESSED_SUMMARY" not in result
+    assert bucket_mgr.touched == ["A"]
+
+
+@pytest.mark.asyncio
+async def test_search_ordinary_long_direct_hit_still_dehydrates(patch_breath, monkeypatch):
+    import server
+
+    bucket = _bucket("A", "普通长正文 " * 80, score=10.0, importance=5)
+    patch_breath(
+        [bucket],
+        search_ids=["A"],
+        token_counter=lambda text: 200 if "普通长正文" in str(text) else 1,
+    )
+    monkeypatch.setattr(server, "dehydrator", FixedDehydrator())
+
+    result = await server.breath(query="普通", max_tokens=500, include_related=False)
+
+    assert "COMPRESSED_SUMMARY" in result
+    assert "direct_hit:raw" not in result
+
+
+@pytest.mark.asyncio
+async def test_search_favorite_direct_hit_preserves_anchor_and_reason(patch_breath, monkeypatch):
+    import server
+
+    bucket = _bucket(
+        "A",
+        "\n".join(
+            [
+                "普通开头。",
+                "",
+                "### affect_anchor",
+                "> 小雨把旧信放到桌上。",
+                "> Dbmaj9 -> Ab/C -> Bbm9",
+                "",
+                "### 喜欢它的原因",
+                "它保留了被摘要抹平前的味道。",
+            ]
+        ),
+        score=10.0,
+        importance=5,
+    )
+    bucket["metadata"]["tags"] = ["haven_favorite", "flavor_偏爱"]
+    patch_breath(
+        [bucket],
+        search_ids=["A"],
+        token_counter=lambda text: 200 if "普通开头" in str(text) else 1,
+    )
+    monkeypatch.setattr(server, "dehydrator", FixedDehydrator())
+
+    result = await server.breath(query="旧信", max_tokens=500, include_related=False)
+
+    assert "direct_hit:raw" in result
+    assert "reason=favorite" in result
+    assert "affect_anchor:" in result
+    assert "Dbmaj9" in result
+    assert "喜欢它的原因:" in result
+    assert "被摘要抹平前的味道" in result
+    assert "COMPRESSED_SUMMARY" not in result
 
 
 @pytest.mark.asyncio
