@@ -2184,8 +2184,9 @@ class GatewayService:
             block = self._format_direct_moment(
                 moment,
                 grouped_moments,
-                body_max_chars=130 if compact else 260,
+                body_max_chars=90 if compact else 260,
                 context_max_chars=60 if compact else 120,
+                context_limit=0 if compact else 2,
             )
             tokens = count_tokens_approx(block)
             if tokens <= 0:
@@ -2208,12 +2209,15 @@ class GatewayService:
         *,
         body_max_chars: int = 260,
         context_max_chars: int = 120,
+        context_limit: int = 2,
     ) -> str:
         line = self._format_moment_line(moment, max_chars=body_max_chars, note="")
+        if context_limit <= 0:
+            return line
         contexts = [
             item for item in self._context_moments_for_seed(moment, grouped_moments)
             if item.get("section") in MOMENT_TEMPERATURE_SECTIONS
-        ][:2]
+        ][:context_limit]
         if not contexts:
             return line
         context_lines = [
@@ -2255,6 +2259,7 @@ class GatewayService:
 
         remaining = self.related_memory_budget
         parts = []
+        related_max_chars = 90 if self._query_wants_body_chain(query_text) else 180
         used_bucket_ids = {
             str(moment.get("bucket_id") or "")
             for moment in seed_moments
@@ -2264,7 +2269,7 @@ class GatewayService:
         for moment in self._secondary_direct_moments(query_text, moment_candidates, used_bucket_ids):
             block = self._format_moment_line(
                 moment,
-                max_chars=180,
+                max_chars=related_max_chars,
                 note="related_query_hit",
             )
             tokens = count_tokens_approx(block)
@@ -2312,7 +2317,7 @@ class GatewayService:
                     if moment.get("moment_id") in seen_moment_ids:
                         continue
             note = "conflict_or_blocking_path" if path_has_caution(hit.best_path) else "background_association_not_current_fact"
-            block = self._format_moment_line(moment, max_chars=180, note=note)
+            block = self._format_moment_line(moment, max_chars=related_max_chars, note=note)
             tokens = count_tokens_approx(block)
             if tokens > remaining and parts:
                 break
