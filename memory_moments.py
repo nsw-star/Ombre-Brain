@@ -10,6 +10,7 @@ from typing import Any
 
 from memory_relevance import (
     MemoryRelevanceOptions,
+    content_terms_for_query,
     expanded_terms_for_query,
     facets_for_node,
     memory_relevance_options_from_config,
@@ -900,7 +901,7 @@ def _moment_query_score(
     score = 0.0
     if _term_matches_fields(query_lower, fields):
         score += 0.65
-    terms = _query_terms(query)
+    terms = content_terms_for_query(query, relevance_options)
     if terms:
         matched = sum(1 for term in terms if _term_matches_fields(term.lower(), fields))
         score += min(0.5, matched / max(1, len(terms)) * 0.5)

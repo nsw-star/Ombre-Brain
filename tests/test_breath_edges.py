@@ -813,6 +813,48 @@ async def test_email_query_suppresses_high_importance_hardware_protocol(patch_br
 
 
 @pytest.mark.asyncio
+async def test_context_name_does_not_beat_email_action_intent(patch_breath):
+    import server
+
+    patch_breath(
+        [
+            _bucket(
+                "P",
+                "小雨沟通偏好：小雨说月亮时进入工作模式，不喜欢模板安慰。",
+                name="小雨沟通偏好",
+                score=10,
+                importance=10,
+            ),
+            _bucket(
+                "M",
+                "QQ邮箱自动收发配置：Haven 可以给小雨发邮件，也可以检查收件箱。",
+                name="QQ邮箱自动收发配置",
+                score=3,
+                importance=4,
+            ),
+        ],
+        search_ids=["P", "M"],
+        reranker_engine=DummyRerankerEngine(
+            enabled=True,
+            score_by_text={
+                "小雨沟通偏好": 0.99,
+                "QQ邮箱自动收发配置": 0.35,
+            },
+        ),
+    )
+
+    result = await server.breath(
+        query="小雨 发邮件",
+        max_results=1,
+        max_tokens=500,
+        include_related=False,
+    )
+
+    assert "QQ邮箱自动收发配置" in result
+    assert "小雨沟通偏好" not in result
+
+
+@pytest.mark.asyncio
 async def test_email_query_keeps_hardware_candidate_with_direct_keyword_evidence(patch_breath):
     import server
 

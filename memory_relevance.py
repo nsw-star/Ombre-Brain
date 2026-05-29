@@ -147,6 +147,25 @@ DEFAULT_FACET_ALIASES = {
 
 DEFAULT_SECTION_HINTS: dict[str, tuple[str, ...]] = {}
 
+DEFAULT_CONTEXT_TERMS = (
+    "xiaoyu",
+    "rain",
+    "haven",
+    "user",
+    "assistant",
+    "小雨",
+    "池又雨",
+    "哥哥",
+    "宝宝",
+    "老婆",
+    "亲爱的",
+    "我",
+    "你",
+    "她",
+    "他",
+    "ta",
+)
+
 DEFAULT_QUERY_EXPANSIONS = {
     "embodiment": ("hardware_protocol",),
 }
@@ -167,6 +186,7 @@ class MemoryRelevanceOptions:
     )
     blocked_facets: frozenset[str] = frozenset()
     section_hints: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    context_terms: tuple[str, ...] = DEFAULT_CONTEXT_TERMS
 
 
 @dataclass(frozen=True)
@@ -185,7 +205,14 @@ class RelevanceDecision:
 def memory_relevance_options_from_config(config: dict | None = None) -> MemoryRelevanceOptions:
     aliases = {facet: list(values) for facet, values in DEFAULT_FACET_ALIASES.items()}
     section_hints = {key: list(values) for key, values in DEFAULT_SECTION_HINTS.items()}
+    context_terms = list(DEFAULT_CONTEXT_TERMS)
     blocked: set[str] = set()
+
+    identity = (config or {}).get("identity", {}) if isinstance(config, dict) else {}
+    if isinstance(identity, dict):
+        for key in ("ai_name", "user_name", "user_display_name"):
+            context_terms.extend(_list_text(identity.get(key)))
+        context_terms.extend(_list_text(identity.get("user_aliases")))
 
     for cfg in _relevance_config_sections(config):
         _merge_alias_config(aliases, cfg.get("aliases"))
@@ -193,6 +220,7 @@ def memory_relevance_options_from_config(config: dict | None = None) -> MemoryRe
         _merge_section_hints(section_hints, cfg.get("section_hints"))
         blocked.update(_list_text(cfg.get("blocked_facets")))
         blocked.update(_list_text(cfg.get("disabled_facets")))
+        context_terms.extend(_list_text(cfg.get("context_terms")))
 
     blocked = {str(facet).strip() for facet in blocked if str(facet).strip()}
     normalized_aliases = {}
@@ -215,6 +243,7 @@ def memory_relevance_options_from_config(config: dict | None = None) -> MemoryRe
         aliases=normalized_aliases,
         blocked_facets=frozenset(blocked),
         section_hints=normalized_hints,
+        context_terms=tuple(_unique(_normalize_alias(term) for term in context_terms)),
     )
 
 
@@ -300,6 +329,20 @@ def query_has_facet(
     return str(facet) in active_facets(facets_for_text(query, options))
 
 
+def content_terms_for_query(
+    query: str,
+    options: MemoryRelevanceOptions | None = None,
+) -> list[str]:
+    options = options or memory_relevance_options_from_config()
+    terms = _query_terms(query)
+    content_terms = [
+        term
+        for term in terms
+        if not _is_context_term(term, options.context_terms)
+    ]
+    return content_terms or terms
+
+
 def relevance_decision(
     query: str,
     node: dict,
@@ -314,7 +357,7 @@ def relevance_decision(
         return RelevanceDecision(1.0, query_facets, node_facets)
 
     reasons = []
-    direct_query_evidence = _has_direct_query_evidence(query, node)
+    direct_query_evidence = _has_direct_query_evidence(query, node, options)
     overlap = query_active & node_active
 
     if "old_or_resolved" in node_active and "old_or_resolved" not in query_active:
@@ -370,6 +413,14 @@ def relevance_decision(
     elif reasons and any(reason.endswith("_demoted") for reason in reasons):
         multiplier = min(multiplier, 0.65)
 
+    if (
+        "communication_action" in query_active
+        and "communication_action" not in node_active
+        and not direct_query_evidence
+    ):
+        multiplier = min(multiplier, 0.45)
+        reasons.append("communication_action_missing_demoted")
+
     return RelevanceDecision(multiplier, query_facets, node_facets, tuple(reasons))
 
 
@@ -411,8 +462,12 @@ def recall_rank(
             return 1, -score
     if "hardware_protocol" in query_active and "hardware_protocol" in node_active:
         return 0, -score
-    if "communication_action" in query_active and "communication_action" in node_active:
-        return 0, -score
+    if "communication_action" in query_active:
+        if "hardware_protocol" in node_active and "hardware_protocol" not in query_active:
+            return 5, -score
+        if "communication_action" in node_active:
+            return 0, -score
+        return 15, -score
     if "relationship_identity" in query_active and "relationship_identity" in node_active:
         return 0, -score
     if "intimacy" in query_active and "intimacy" in node_active:
@@ -556,11 +611,15 @@ def _metadata_marks_old(meta: dict) -> bool:
     )
 
 
-def _has_direct_query_evidence(query: str, node: dict) -> bool:
+def _has_direct_query_evidence(
+    query: str,
+    node: dict,
+    options: MemoryRelevanceOptions,
+) -> bool:
     node_text = _normalize_text(_node_text(node))
     if not node_text:
         return False
-    for term in _query_terms(query):
+    for term in content_terms_for_query(query, options):
         if _contains_alias(node_text, _normalize_alias(term)):
             return True
     return False
@@ -577,12 +636,20 @@ def _node_text(node: dict) -> str:
             str(node.get("name") or ""),
             str(meta.get("name") or ""),
             str(meta.get("bucket_name") or ""),
+            str(meta.get("summary") or ""),
+            str(meta.get("annotation_summary") or ""),
+            _join_evidence_spans(meta.get("evidence_spans")),
             _join_text(meta.get("tags")),
             _join_text(meta.get("bucket_tags")),
             _join_text(meta.get("domain")),
             _join_text(meta.get("bucket_domain")),
         ]
     )
+
+
+def _is_context_term(term: str, context_terms: tuple[str, ...]) -> bool:
+    normalized = _normalize_alias(term)
+    return bool(normalized and normalized in set(context_terms or ()))
 
 
 def _query_terms(query: str) -> list[str]:

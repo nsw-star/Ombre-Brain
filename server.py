@@ -1786,7 +1786,7 @@ def _apply_recall_relevance_gate(query: str, candidates: list[dict]) -> list[dic
         item["score"] = new_score
         filtered.append(item)
     if adjusted:
-        filtered.sort(key=lambda item: float(item.get("score", 0.0)), reverse=True)
+        filtered.sort(key=lambda item: _recall_rank(query, item))
     return filtered
 
 
@@ -1824,11 +1824,11 @@ async def _rerank_breath_moment_candidates(query: str, candidates: list[dict]) -
         reranked.append(item)
     reranked.sort(
         key=lambda item: (
-            item.get("rerank_score") is not None,
-            item.get("combined_score", item.get("score", 0.0)),
-            item.get("score", 0.0),
+            _recall_rank(query, item)[0],
+            item.get("rerank_score") is None,
+            -(_safe_float(item.get("combined_score", item.get("score"))) or 0.0),
+            -(_safe_float(item.get("score")) or 0.0),
         ),
-        reverse=True,
     )
     return reranked + tail
 
@@ -1976,6 +1976,7 @@ def _write_breath_recall_diagnostics(
             "score_after_gate": _safe_float(gated.get("score")) if gated else None,
             "rerank_score": _safe_float(final.get("rerank_score")) if final else None,
             "combined_score": _safe_float(final.get("combined_score")) if final else None,
+            "intent_rank": _recall_rank(query, final or moment)[0],
             "gate": "filtered" if decision.multiplier <= 0 else "kept",
             "gate_multiplier": round(float(decision.multiplier), 4),
             "gate_reasons": list(decision.reasons),
