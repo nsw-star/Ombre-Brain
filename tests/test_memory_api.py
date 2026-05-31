@@ -66,6 +66,21 @@ class DummyDehydrator:
         return content[:120]
 
 
+class DigestDehydrator(DummyDehydrator):
+    async def digest(self, content: str):
+        return [
+            {
+                "content": content,
+                "tags": ["project_event"],
+                "importance": 7,
+                "domain": ["记忆"],
+                "valence": 0.6,
+                "arousal": 0.4,
+                "name": "Operit 自动写入门卫",
+            }
+        ]
+
+
 class EchoDehydrator:
     async def dehydrate(self, content: str, metadata: dict | None = None) -> str:
         return content
@@ -510,6 +525,139 @@ async def test_hold_returns_before_slow_embedding_refresh(monkeypatch, bucket_mg
     assert len(buckets) == 1
     await finish_blocking_embedding(embedding_engine)
     assert embedding_engine.calls[0][0] == buckets[0]["id"]
+
+
+@pytest.mark.asyncio
+async def test_auto_grow_low_surprise_logs_candidate_without_writing(
+    monkeypatch,
+    test_config,
+    bucket_mgr,
+    decay_eng,
+):
+    import server
+    from memory_write_gate import MemoryWriteGate
+
+    gate = MemoryWriteGate(test_config)
+    monkeypatch.setattr(server, "bucket_mgr", bucket_mgr)
+    monkeypatch.setattr(server, "decay_engine", decay_eng)
+    monkeypatch.setattr(server, "memory_write_gate", gate)
+
+    result = await server.grow("刚才只是测试一下，不用记。", source="operit")
+    buckets = await bucket_mgr.list_all(include_archive=True)
+    records = gate.list_recent()
+
+    assert result.startswith("门卫→skipped")
+    assert "low_surprise" in result
+    assert buckets == []
+    assert records[-1]["decision"] == "skipped"
+    assert records[-1]["source"] == "operit"
+
+
+@pytest.mark.asyncio
+async def test_auto_grow_detects_operit_timestamp_prefix_without_source(
+    monkeypatch,
+    test_config,
+    bucket_mgr,
+    decay_eng,
+):
+    import server
+    from memory_write_gate import MemoryWriteGate
+
+    gate = MemoryWriteGate(test_config)
+    monkeypatch.setattr(server, "bucket_mgr", bucket_mgr)
+    monkeypatch.setattr(server, "decay_engine", decay_eng)
+    monkeypatch.setattr(server, "memory_write_gate", gate)
+
+    result = await server.grow("【2026-05-31 17:20】\n刚才只是测试一下，不用记。")
+    buckets = await bucket_mgr.list_all(include_archive=True)
+    records = gate.list_recent()
+
+    assert result.startswith("门卫→skipped")
+    assert buckets == []
+    assert records[-1]["source"] == "operit"
+
+
+@pytest.mark.asyncio
+async def test_auto_grow_task_status_summary_becomes_pending(
+    monkeypatch,
+    test_config,
+    bucket_mgr,
+    decay_eng,
+):
+    import server
+    from memory_write_gate import MemoryWriteGate
+
+    gate = MemoryWriteGate(test_config)
+    monkeypatch.setattr(server, "bucket_mgr", bucket_mgr)
+    monkeypatch.setattr(server, "decay_engine", decay_eng)
+    monkeypatch.setattr(server, "memory_write_gate", gate)
+
+    content = (
+        "2026-05-31 Operit 总结：TODO：把 memory_preflight/memory_commit 接入工作流；"
+        "未完成：确认 Termux 服务路径；已完成：grow 门卫适配了 ob-auto-grow。"
+    )
+    result = await server.grow(content, source="operit")
+    buckets = await bucket_mgr.list_all(include_archive=True)
+    records = gate.list_recent()
+
+    assert result.startswith("门卫→pending")
+    assert buckets == []
+    assert records[-1]["decision"] == "pending"
+    assert "task_status_signal" in records[-1]["reasons"]
+
+
+@pytest.mark.asyncio
+async def test_auto_grow_repeated_pending_candidate_is_promoted(
+    monkeypatch,
+    test_config,
+    bucket_mgr,
+    decay_eng,
+):
+    import server
+    from memory_write_gate import MemoryWriteGate
+
+    cfg = {
+        **test_config,
+        "memory_write_gate": {
+            "enabled": True,
+            "auto_sources": ["operit"],
+            "pending_threshold": 0.35,
+            "grow_threshold": 0.95,
+            "repeat_promote_count": 2,
+            "candidate_log": "test-memory-write-candidates.jsonl",
+        },
+    }
+    gate = MemoryWriteGate(cfg)
+
+    async def no_related_bucket(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(server, "bucket_mgr", bucket_mgr)
+    monkeypatch.setattr(server, "decay_engine", decay_eng)
+    monkeypatch.setattr(server, "dehydrator", DigestDehydrator())
+    monkeypatch.setattr(server, "embedding_engine", DummyEmbeddingEngine())
+    monkeypatch.setattr(server, "memory_write_gate", gate)
+    monkeypatch.setattr(server, "_find_readonly_related_bucket", no_related_bucket)
+    monkeypatch.setattr(server, "_queue_memory_enrichment", lambda bucket_id: None)
+
+    content = (
+        "2026-05-31 Operit workflow 决定把自动总结先交给 grow 门卫判断，"
+        "中等意外度 pending，重复出现再写入长期记忆。"
+    )
+
+    first = await server.grow(content, source="operit")
+    assert first.startswith("门卫→pending")
+    assert await bucket_mgr.list_all(include_archive=True) == []
+
+    second = await server.grow(content, source="operit")
+    buckets = await bucket_mgr.list_all(include_archive=True)
+    records = gate.list_recent()
+
+    assert second.startswith("门卫→grow")
+    assert "1条|新1合0" in second
+    assert len(buckets) == 1
+    assert buckets[0]["metadata"]["name"] == "Operit 自动写入门卫"
+    assert [record["decision"] for record in records[-2:]] == ["pending", "grow"]
 
 
 @pytest.mark.asyncio
