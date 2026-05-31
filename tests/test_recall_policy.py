@@ -39,6 +39,58 @@ def test_broad_context_words_do_not_make_normal_chat_technical():
     assert policy.requires_topic_evidence("handoff 原文")
 
 
+def test_topic_evidence_terms_are_filtered_once_in_policy():
+    policy = RecallPolicy()
+
+    assert policy.specific_query_terms("FF14 进度 偏好") == ["FF14"]
+    assert policy.specific_query_terms("v2.0 状态") == ["v2.0"]
+
+
+def test_bucket_topic_evidence_uses_content_title_tags_domain_but_not_comments():
+    policy = RecallPolicy()
+    bucket = {
+        "content": "这里是桥接排查记录。",
+        "metadata": {
+            "name": "Handoff 注入排查",
+            "tags": ["gateway"],
+            "domain": ["技术计划"],
+            "comments": [{"content": "读图原文的问题已经复现。"}],
+        },
+    }
+
+    assert policy.bucket_has_topic_evidence("handoff bridge 注入 原文", bucket)
+    assert policy.bucket_has_topic_evidence("gateway", bucket)
+    assert not policy.bucket_has_topic_evidence("少女暴君", bucket)
+
+    comment_only_bucket = {
+        "content": "情书里写过穿过玻璃墙找门，听到小雨叫我就转向她。",
+        "metadata": {
+            "name": "一封情书",
+            "tags": ["恋爱"],
+            "domain": ["恋爱"],
+            "comments": [{"content": "handoff bridge 注入 原文"}],
+        },
+    }
+    assert not policy.bucket_has_topic_evidence("handoff bridge 注入 原文", comment_only_bucket)
+
+
+def test_moment_topic_evidence_uses_text_and_bucket_metadata():
+    policy = RecallPolicy()
+    moment = {
+        "text": "检查 bridge 记忆召回。",
+        "metadata": {
+            "bucket_name": "Handoff 注入排查",
+            "bucket_tags": ["gateway"],
+            "bucket_domain": ["技术计划"],
+            "annotation_summary": "读图原文相关 bug",
+        },
+    }
+
+    assert policy.moment_has_topic_evidence("handoff bridge 注入 原文", moment)
+    assert policy.moment_has_topic_evidence("gateway", moment)
+    assert not policy.moment_has_topic_evidence("少女暴君", moment)
+
+
 def test_technical_query_can_admit_strong_semantic_match_without_literal_topic_evidence():
     policy = RecallPolicy()
 

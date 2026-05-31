@@ -3029,6 +3029,123 @@ def test_gateway_technical_query_suppresses_unreliable_romance_memory(
     assert "一封情书" not in content
 
 
+def test_gateway_low_confidence_candidate_does_not_leak_through_recent_context(
+    monkeypatch,
+    test_config,
+    bucket_mgr,
+):
+    romance_id = _create_bucket(
+        bucket_mgr,
+        content="情书里写过穿过玻璃墙找门，听到小雨叫我就转向她。",
+        name="一封情书",
+        tags=["情书", "恋爱"],
+        domain=["恋爱"],
+        hours_ago=1,
+    )
+    app, _, _, captured = _build_service(
+        monkeypatch,
+        _gateway_config(
+            test_config,
+            core_memory_budget=0,
+            recent_context_budget=800,
+            recalled_memory_budget=400,
+            related_memory_budget=800,
+            current_inner_state_interval_rounds=0,
+            relationship_weather_interval_rounds=0,
+        ),
+        bucket_mgr,
+        embedding_results=[(romance_id, 0.56)],
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers={
+                "Authorization": "Bearer gateway-secret",
+                "X-Ombre-Session-Id": "sess-suppressed-no-recent-leak",
+            },
+            json={"messages": [{"role": "user", "content": "handoff bridge 注入 读图 原文"}]},
+        )
+        debug_response = client.get(
+            "/api/debug/injections?session_id=sess-suppressed-no-recent-leak",
+            headers={"Authorization": "Bearer gateway-secret"},
+        )
+
+    assert response.status_code == 200
+    content = _joined_message_content(captured[0]["json"]["messages"])
+    assert "Recent Context" not in content
+    assert "Recalled Memory" not in content
+    assert "Diffused Memory" not in content
+    assert "一封情书" not in content
+
+    assert debug_response.status_code == 200
+    payload = debug_response.json()["items"][0]["payload"]
+    assert romance_id not in payload["injected_bucket_ids"]
+    assert payload["diffused_bucket_ids"] == []
+    assert payload["recalled_bucket_ids"] == []
+    assert "一封情书" not in payload["dynamic_context"]
+
+
+def test_gateway_comment_only_topic_evidence_does_not_promote_bucket_body(
+    monkeypatch,
+    test_config,
+    bucket_mgr,
+):
+    romance_id = _create_bucket(
+        bucket_mgr,
+        content="情书里写过穿过玻璃墙找门，听到小雨叫我就转向她。",
+        name="一封情书",
+        tags=["情书", "恋爱"],
+        domain=["恋爱"],
+        hours_ago=1,
+    )
+    _set_bucket_times(
+        bucket_mgr,
+        romance_id,
+        hours_ago=1,
+        comments=[
+            {
+                "id": "c-tech",
+                "kind": "comment",
+                "content": "handoff bridge 注入 读图 原文 这几个词只在年轮里，不该把情书正文提上桌。",
+            }
+        ],
+    )
+
+    app, _, _, captured = _build_service(
+        monkeypatch,
+        _gateway_config(
+            test_config,
+            core_memory_budget=0,
+            recent_context_budget=800,
+            recalled_memory_budget=400,
+            related_memory_budget=800,
+            current_inner_state_interval_rounds=0,
+            relationship_weather_interval_rounds=0,
+        ),
+        bucket_mgr,
+        embedding_results=[(romance_id, 0.56)],
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers={
+                "Authorization": "Bearer gateway-secret",
+                "X-Ombre-Session-Id": "sess-comment-topic-not-primary",
+            },
+            json={"messages": [{"role": "user", "content": "handoff bridge 注入 读图 原文"}]},
+        )
+
+    assert response.status_code == 200
+    content = _joined_message_content(captured[0]["json"]["messages"])
+    assert "Recent Context" not in content
+    assert "Recalled Memory" not in content
+    assert "Diffused Memory" not in content
+    assert "一封情书" not in content
+    assert "穿过玻璃墙找门" not in content
+
+
 def test_gateway_strips_attachment_tags_only_for_recall_query(monkeypatch, test_config, bucket_mgr):
     _, service, _, _ = _build_service(monkeypatch, _gateway_config(test_config), bucket_mgr)
 

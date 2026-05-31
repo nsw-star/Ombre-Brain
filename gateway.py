@@ -35,7 +35,6 @@ from memory_edges import MemoryEdgeStore
 from memory_moments import MemoryMomentStore
 from memory_relevance import (
     active_facets,
-    content_terms_for_query,
     facets_for_node,
     facets_for_text,
     memory_relevance_options_from_config,
@@ -99,31 +98,6 @@ MOMENT_SECTION_LABELS = {
 }
 MOMENT_TEMPERATURE_SECTIONS = CONTEXT_ONLY_SECTIONS
 PROFILE_CONTEXT_SECTIONS = ("evidence_context", "context", "reflection", "feeling", "followup", "comment")
-WEAK_RECALL_TOPIC_TERMS = {
-    "进度",
-    "偏好",
-    "情况",
-    "状态",
-    "事情",
-    "东西",
-    "内容",
-    "相关",
-    "记忆",
-    "回忆",
-    "总结",
-    "记录",
-    "查询",
-    "搜索",
-    "最近",
-    "之前",
-    "过去",
-    "现在",
-    "当前",
-    "安排",
-    "计划",
-    "问题",
-    "目标",
-}
 
 
 class GatewayService:
@@ -2749,74 +2723,13 @@ class GatewayService:
         return self.recall_policy.requires_topic_evidence(query)
 
     def _moment_has_query_topic_evidence(self, query: str, moment: dict) -> bool:
-        terms = self._specific_query_terms(query)
-        if not terms:
-            return False
-        meta = moment.get("metadata", {}) if isinstance(moment.get("metadata"), dict) else {}
-        fields = " ".join(
-            [
-                str(moment.get("text") or ""),
-                str(meta.get("annotation_summary") or ""),
-                self._evidence_spans_text(meta.get("evidence_spans")),
-                str(meta.get("bucket_name") or ""),
-                " ".join(str(tag) for tag in (meta.get("bucket_tags") or []) if str(tag).strip()),
-                " ".join(str(item) for item in (meta.get("bucket_domain") or []) if str(item).strip()),
-            ]
-        ).lower()
-        return any(term.lower() in fields for term in terms)
+        return self.recall_policy.moment_has_topic_evidence(query, moment)
 
     def _bucket_has_query_topic_evidence(self, query: str, bucket: dict) -> bool:
-        terms = self._specific_query_terms(query)
-        if not terms:
-            return False
-        meta = bucket.get("metadata", {}) if isinstance(bucket.get("metadata"), dict) else {}
-        fields = " ".join(
-            [
-                self._bucket_text_with_comments(bucket),
-                str(meta.get("name") or ""),
-                " ".join(str(tag) for tag in (meta.get("tags") or []) if str(tag).strip()),
-                " ".join(str(item) for item in (meta.get("domain") or []) if str(item).strip()),
-            ]
-        ).lower()
-        return any(term.lower() in fields for term in terms)
+        return self.recall_policy.bucket_has_topic_evidence(query, bucket)
 
     def _specific_query_terms(self, query: str) -> list[str]:
-        raw = str(query or "")
-        terms = list(content_terms_for_query(raw, self.relevance_options))
-        terms.extend(re.findall(r"\d+(?:\.\d+)+", raw))
-        terms.extend(re.findall(r"[A-Za-z]+[A-Za-z0-9_.:-]*\d[A-Za-z0-9_.:-]*", raw))
-        kept = []
-        seen = set()
-        for term in terms:
-            cleaned = str(term or "").strip()
-            if not cleaned:
-                continue
-            key = cleaned.lower()
-            if key in seen:
-                continue
-            if key in WEAK_RECALL_TOPIC_TERMS:
-                continue
-            if re.fullmatch(r"[a-z0-9_.:-]+", key) and len(key) < 3 and not re.fullmatch(r"\d+(?:\.\d+)+", key):
-                continue
-            if re.fullmatch(r"[\u4e00-\u9fff]+", cleaned) and len(cleaned) < 2:
-                continue
-            seen.add(key)
-            kept.append(cleaned)
-        return kept
-
-    @staticmethod
-    def _evidence_spans_text(value: Any) -> str:
-        if not isinstance(value, list):
-            return ""
-        parts = []
-        for item in value:
-            if isinstance(item, dict):
-                text = str(item.get("text") or "").strip()
-                if text:
-                    parts.append(text)
-            elif isinstance(item, str) and item.strip():
-                parts.append(item.strip())
-        return " ".join(parts)
+        return self.recall_policy.specific_query_terms(query)
 
     def _allows_caution_diffusion(self, query: str, context_mode: str) -> bool:
         if str(context_mode or "").strip() in {"reflective_repair", "conflict_repair"}:
