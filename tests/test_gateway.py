@@ -2427,12 +2427,22 @@ def test_gateway_direct_high_value_long_bucket_renders_capsule(
             },
             json={"messages": [{"role": "user", "content": "当时怎么说"}]},
         )
+        debug_response = client.get(
+            "/api/debug/injections?session_id=sess-direct-capsule&include_context=0",
+            headers={"Authorization": "Bearer gateway-secret"},
+        )
 
     assert response.status_code == 200
     injected = _joined_message_content(captured[0]["json"]["messages"])
     assert "bucket_capsule" in injected
     assert "DIRECT CAPSULE 高价值长桶" in injected
     assert "matched_moment:" in injected
+    assert debug_response.status_code == 200
+    debug_payload = debug_response.json()["items"][0]["payload"]
+    debug_render = debug_payload["recalled_moment_debug"][0]["direct_render"]
+    assert debug_render["shape"] == "bucket_capsule"
+    assert debug_render["high_value"] is True
+    assert debug_render["detail_query"] is True
 
 
 def test_gateway_diffused_memory_renders_temperature_context(

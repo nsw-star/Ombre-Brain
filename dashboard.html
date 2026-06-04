@@ -3545,6 +3545,7 @@ function renderGatewayInjectionItem(item) {
   var injected = payload.injected_bucket_ids || [];
   var recalledMoments = payload.recalled_moment_ids || [];
   var diffusedMoments = payload.diffused_moment_ids || [];
+  var directRender = gatewayDirectRenderSummaries(payload);
   var chips = [
     { text: 'round ' + (row.round_id || '—') },
     { text: 'recalled ' + recalled.length, state: recalled.length ? 'allow' : '' },
@@ -3563,8 +3564,19 @@ function renderGatewayInjectionItem(item) {
     '<div class="diffusion-path">query: ' + esc(payload.query_preview || '') + '</div>' +
     '<div class="diffusion-path">buckets: ' + esc(injected.slice(0, 8).join(', ') || '—') + '</div>' +
     '<div class="diffusion-path">moments: ' + esc(recalledMoments.concat(diffusedMoments).slice(0, 8).join(', ') || '—') + '</div>' +
+    (directRender ? '<div class="diffusion-path">direct render: ' + esc(directRender) + '</div>' : '') +
     (contextPreview ? '<div class="gateway-context-preview">' + esc(contextPreview) + '</div>' : '') +
   '</div>';
+}
+
+function gatewayDirectRenderSummaries(payload) {
+  var rows = Array.isArray(payload.recalled_moment_debug) ? payload.recalled_moment_debug : [];
+  return rows.map(function(row) {
+    var r = row.direct_render || {};
+    if (!r.shape) return '';
+    var label = row.bucket_name || row.bucket_id || row.moment_id || 'moment';
+    return label + ' -> ' + r.shape + (r.reason ? ' · ' + r.reason : '');
+  }).filter(Boolean).slice(0, 5).join(' / ');
 }
 
 function gatewayContextPreview(payload) {

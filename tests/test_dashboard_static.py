@@ -79,6 +79,9 @@ def test_dashboard_breath_view_loads_gateway_injection_debug():
     assert "BASE + '/api/gateway-injections?limit=10" in html
     assert "function renderGatewayInjections(data)" in html
     assert "function renderGatewayInjectionItem(item)" in html
+    assert "function gatewayDirectRenderSummaries(payload)" in html
+    assert "direct render:" in html
+    assert "row.direct_render" in html
     assert "Gateway 最近注入" in html
 
 

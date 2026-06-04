@@ -731,6 +731,7 @@ class GatewayService:
                 query=current_user_query,
                 stable_context=stable_context,
                 dynamic_context=dynamic_context,
+                all_buckets=all_buckets,
                 recalled_moments=recalled_moments,
                 recalled_memory=recalled_memory,
                 related_memory=related_memory,
@@ -2800,6 +2801,52 @@ class GatewayService:
 
         return self._format_direct_bucket_window(bucket, moment, grouped_moments, budget)
 
+    def _direct_bucket_render_debug(
+        self,
+        bucket: dict | None,
+        moment: dict | None,
+        budget: int,
+        *,
+        query_text: str = "",
+    ) -> dict[str, Any]:
+        bucket = bucket or {}
+        moment = moment or {}
+        mode = self.direct_render_mode
+        original = self._rendered_bucket_content(bucket)
+        header = self._direct_bucket_header(bucket, moment)
+        original_block = f"{header} bucket_original\n{original}" if original else f"{header} bucket_original"
+        original_tokens = count_tokens_approx(original_block)
+        token_budget = max(0, int(budget or 0))
+        high_value = self._bucket_is_high_value(bucket)
+        detail_query = self._query_requests_direct_detail(query_text)
+        original_fits = original_tokens <= token_budget
+        wants_capsule = mode == "full" or (mode == "auto" and (high_value or detail_query))
+        if original_fits:
+            shape = "bucket_original"
+            reason = "original_fits_budget"
+        elif wants_capsule:
+            shape = "bucket_capsule"
+            if mode == "full":
+                reason = "mode_full"
+            elif detail_query:
+                reason = "auto_detail_query"
+            else:
+                reason = "auto_high_value"
+        else:
+            shape = "bucket_window"
+            reason = "long_bucket_window"
+        return {
+            "mode": mode,
+            "shape": shape,
+            "reason": reason,
+            "token_budget": token_budget,
+            "original_tokens": original_tokens,
+            "original_fits": original_fits,
+            "high_value": high_value,
+            "detail_query": detail_query,
+            "wants_capsule": wants_capsule,
+        }
+
     def _format_direct_bucket_window(
         self,
         bucket: dict,
@@ -4154,6 +4201,7 @@ class GatewayService:
         explicit_lookup: bool = False,
         include_text: bool = False,
         query: str = "",
+        direct_render: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload = {
             "bucket_id": str(moment.get("bucket_id") or ""),
@@ -4174,6 +4222,8 @@ class GatewayService:
                 query=query,
             ),
         }
+        if direct_render:
+            payload["direct_render"] = direct_render
         if include_text:
             payload["text_preview"] = self._moment_text(moment, 180)
         return payload
@@ -4185,6 +4235,7 @@ class GatewayService:
         query: str,
         stable_context: str,
         dynamic_context: str,
+        all_buckets: list[dict],
         recalled_moments: list[dict],
         recalled_memory: str,
         related_memory: str,
@@ -4208,6 +4259,11 @@ class GatewayService:
         diffused_bucket_ids = self._extract_bucket_ids_from_context(related_memory)
         injected_bucket_ids = list(dict.fromkeys(recalled_bucket_ids + diffused_bucket_ids + favorite_ids))
         explicit_lookup = self._query_explicitly_requests_caution_memory(query)
+        bucket_map = {
+            str(bucket.get("id") or ""): bucket
+            for bucket in all_buckets
+            if isinstance(bucket, dict) and bucket.get("id")
+        }
         return {
             "model": model,
             "query_preview": self._clip_text(query, 500),
@@ -4224,6 +4280,12 @@ class GatewayService:
                     moment,
                     explicit_lookup=explicit_lookup,
                     query=query,
+                    direct_render=self._direct_bucket_render_debug(
+                        bucket_map.get(str(moment.get("bucket_id") or "")),
+                        moment,
+                        self.recalled_budget,
+                        query_text=query,
+                    ),
                 )
                 for moment in recalled_moments[:20]
             ],
