@@ -101,8 +101,15 @@ def test_dashboard_exposes_gateway_memory_cooldown_settings():
     html = Path("dashboard.html").read_text(encoding="utf-8")
     load_block = html.split("async function loadConfig()", 1)[1].split("async function saveConfig", 1)[0]
     save_block = html.split("async function saveConfig", 1)[1].split("var keyVal =", 1)[0]
+    config_view = html.split('id="config-view"', 1)[1].split('id="detail-panel"', 1)[0]
 
+    assert 'data-tab="memory-config"' in html
+    assert 'id="memory-config-view"' in html
+    assert 'id="memory-config-status"' in html
     assert "<h3>记忆浮现</h3>" in html
+    assert 'id="cfg-recent-context-enabled"' in html
+    assert 'id="cfg-persona-context-enabled"' in html
+    assert 'id="cfg-persona-context-rounds"' in html
     assert 'id="cfg-gateway-cooldown"' in html
     assert 'id="cfg-gateway-rounds"' in html
     assert 'id="cfg-direct-render-mode"' in html
@@ -118,13 +125,19 @@ def test_dashboard_exposes_gateway_memory_cooldown_settings():
     assert "Gateway 需要重启" not in html
     assert "cfg.gateway.cooldown_hours" in html
     assert "cfg.gateway.skip_recent_rounds" in html
+    assert "cfg.gateway.current_inner_state_interval_rounds" in html
     assert "cfg.gateway.direct_render_mode" in html
     assert "cfg.gateway.retrieval_mode" in html
+    assert "((cfg.gateway && cfg.gateway.recent_context_budget) ?? 300) > 0 ? 'true' : 'false'" in load_block
+    assert "personaRounds > 0 ? 'true' : 'false'" in load_block
+    assert "setConfigStatus" in html
+    assert 'id="cfg-gateway-cooldown"' not in config_view
     assert "cfg.memory_diffusion || {}" in load_block
     assert "diffusion.chain_walk_enabled" in load_block
     assert "diffusion.chain_min_confidence" in load_block
     assert "cooldown_hours: floatValue('cfg-gateway-cooldown', 6)" in html
     assert "skip_recent_rounds: numberValue('cfg-gateway-rounds', 5)" in html
+    assert "current_inner_state_interval_rounds: personaContextRounds," in html
     assert "direct_render_mode: document.getElementById('cfg-direct-render-mode').value," in html
     assert "retrieval_mode: document.getElementById('cfg-retrieval-mode').value," in html
     assert "memory_diffusion: {" in save_block

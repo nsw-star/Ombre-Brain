@@ -1811,6 +1811,7 @@ async def test_config_get_reports_gateway_recall_modes(monkeypatch):
                 "recent_context_budget": 240,
                 "recalled_memory_budget": 520,
                 "related_memory_budget": 180,
+                "current_inner_state_interval_rounds": 11,
                 "direct_render_mode": "full",
                 "retrieval_mode": "bucket",
             },
@@ -1827,6 +1828,7 @@ async def test_config_get_reports_gateway_recall_modes(monkeypatch):
     assert payload["gateway"]["recent_context_budget"] == 240
     assert payload["gateway"]["recalled_memory_budget"] == 520
     assert payload["gateway"]["related_memory_budget"] == 180
+    assert payload["gateway"]["current_inner_state_interval_rounds"] == 11
     assert payload["gateway"]["direct_render_mode"] == "full"
     assert payload["gateway"]["retrieval_mode"] == "bucket"
     assert payload["recall"]["query_resurface_enabled"] is True
@@ -1885,6 +1887,7 @@ async def test_config_persist_syncs_existing_runtime_yaml(monkeypatch, test_conf
         "gateway:\n  cooldown_hours: 48\n  skip_recent_rounds: 9\n"
         "  recent_context_cooldown_hours: 8\n  recent_context_reentry_idle_hours: 24\n"
         "  recent_context_budget: 300\n  recalled_memory_budget: 400\n  related_memory_budget: 220\n"
+        "  current_inner_state_interval_rounds: 15\n"
         "  direct_render_mode: auto\n  retrieval_mode: graph\n"
         "recall:\n  query_resurface_enabled: false\n"
         "memory_diffusion:\n  chain_walk_enabled: false\n  max_hops: 2\n"
@@ -1896,6 +1899,7 @@ async def test_config_persist_syncs_existing_runtime_yaml(monkeypatch, test_conf
         "gateway:\n  cooldown_hours: 48\n  skip_recent_rounds: 9\n"
         "  recent_context_cooldown_hours: 8\n  recent_context_reentry_idle_hours: 24\n"
         "  recent_context_budget: 300\n  recalled_memory_budget: 400\n  related_memory_budget: 220\n"
+        "  current_inner_state_interval_rounds: 15\n"
         "  direct_render_mode: auto\n  retrieval_mode: graph\n"
         "recall:\n  query_resurface_enabled: false\n"
         "memory_diffusion:\n  chain_walk_enabled: false\n  max_hops: 2\n"
@@ -1921,6 +1925,7 @@ async def test_config_persist_syncs_existing_runtime_yaml(monkeypatch, test_conf
             "recent_context_budget": 300,
             "recalled_memory_budget": 400,
             "related_memory_budget": 220,
+            "current_inner_state_interval_rounds": 15,
             "direct_render_mode": "auto",
             "retrieval_mode": "graph",
         },
@@ -1974,6 +1979,7 @@ async def test_config_persist_syncs_existing_runtime_yaml(monkeypatch, test_conf
                     "recent_context_budget": 260,
                     "recalled_memory_budget": 520,
                     "related_memory_budget": 180,
+                    "current_inner_state_interval_rounds": 9,
                     "direct_render_mode": "full",
                     "retrieval_mode": "bucket",
                 },
@@ -2011,6 +2017,7 @@ async def test_config_persist_syncs_existing_runtime_yaml(monkeypatch, test_conf
     assert runtime_config["gateway"]["recent_context_budget"] == 260
     assert runtime_config["gateway"]["recalled_memory_budget"] == 520
     assert runtime_config["gateway"]["related_memory_budget"] == 180
+    assert runtime_config["gateway"]["current_inner_state_interval_rounds"] == 9
     assert runtime_config["gateway"]["direct_render_mode"] == "full"
     assert runtime_config["gateway"]["retrieval_mode"] == "bucket"
     assert runtime_config["recall"]["query_resurface_enabled"] is True
@@ -2023,6 +2030,7 @@ async def test_config_persist_syncs_existing_runtime_yaml(monkeypatch, test_conf
             "recent_context_budget": 260,
             "recalled_memory_budget": 520,
             "related_memory_budget": 180,
+            "current_inner_state_interval_rounds": 9,
             "direct_render_mode": "full",
             "retrieval_mode": "bucket",
         },

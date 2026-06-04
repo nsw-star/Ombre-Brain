@@ -277,6 +277,7 @@ class GatewayService:
                 "recent_context_budget": self.recent_budget,
                 "recalled_memory_budget": self.recalled_budget,
                 "related_memory_budget": self.related_memory_budget,
+                "current_inner_state_interval_rounds": self.current_inner_state_interval_rounds,
                 "direct_render_mode": self.direct_render_mode,
                 "retrieval_mode": self.retrieval_mode,
                 "reranker": {
@@ -318,6 +319,7 @@ class GatewayService:
             "recent_context_budget": self.recent_budget,
             "recalled_memory_budget": self.recalled_budget,
             "related_memory_budget": self.related_memory_budget,
+            "current_inner_state_interval_rounds": self.current_inner_state_interval_rounds,
             "direct_render_mode": self.direct_render_mode,
             "retrieval_mode": self.retrieval_mode,
         }
@@ -371,6 +373,13 @@ class GatewayService:
             self.related_memory_budget = max(0, int(payload["related_memory_budget"]))
             self.gateway_cfg["related_memory_budget"] = self.related_memory_budget
             updated.append("gateway.related_memory_budget")
+        if "current_inner_state_interval_rounds" in payload:
+            self.current_inner_state_interval_rounds = max(
+                0,
+                int(payload["current_inner_state_interval_rounds"]),
+            )
+            self.gateway_cfg["current_inner_state_interval_rounds"] = self.current_inner_state_interval_rounds
+            updated.append("gateway.current_inner_state_interval_rounds")
         if "direct_render_mode" in payload:
             self.direct_render_mode = self._normalize_direct_render_mode(payload["direct_render_mode"])
             self.gateway_cfg["direct_render_mode"] = self.direct_render_mode

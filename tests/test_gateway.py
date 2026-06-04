@@ -354,6 +354,7 @@ def test_gateway_config_endpoint_updates_memory_cooldown(monkeypatch, test_confi
         recent_context_budget=300,
         recalled_memory_budget=400,
         related_memory_budget=220,
+        current_inner_state_interval_rounds=15,
         direct_render_mode="auto",
         retrieval_mode="graph",
     )
@@ -373,6 +374,7 @@ def test_gateway_config_endpoint_updates_memory_cooldown(monkeypatch, test_confi
                     "recent_context_budget": 240,
                     "recalled_memory_budget": 520,
                     "related_memory_budget": 180,
+                    "current_inner_state_interval_rounds": 9,
                     "direct_render_mode": "full",
                     "retrieval_mode": "bucket",
                 },
@@ -395,6 +397,7 @@ def test_gateway_config_endpoint_updates_memory_cooldown(monkeypatch, test_confi
         "gateway.recent_context_budget",
         "gateway.recalled_memory_budget",
         "gateway.related_memory_budget",
+        "gateway.current_inner_state_interval_rounds",
         "gateway.direct_render_mode",
         "gateway.retrieval_mode",
         "memory_diffusion.top_k",
@@ -410,6 +413,7 @@ def test_gateway_config_endpoint_updates_memory_cooldown(monkeypatch, test_confi
     assert service.recent_budget == 240
     assert service.recalled_budget == 520
     assert service.related_memory_budget == 180
+    assert service.current_inner_state_interval_rounds == 9
     assert service.direct_render_mode == "full"
     assert service.retrieval_mode == "bucket"
     assert service.diffusion_options.top_k == 3
@@ -424,6 +428,7 @@ def test_gateway_config_endpoint_updates_memory_cooldown(monkeypatch, test_confi
     assert response.json()["gateway"]["recent_context_budget"] == 240
     assert response.json()["gateway"]["recalled_memory_budget"] == 520
     assert response.json()["gateway"]["related_memory_budget"] == 180
+    assert response.json()["gateway"]["current_inner_state_interval_rounds"] == 9
     assert response.json()["memory_diffusion"]["chain_walk_enabled"] is True
 
 

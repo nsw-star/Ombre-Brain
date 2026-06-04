@@ -1561,6 +1561,7 @@
 <div class="tabs">
   <div class="tab active" data-tab="list">记忆桶</div>
   <div class="tab" data-tab="breath">Breath 模拟</div>
+  <div class="tab" data-tab="memory-config">记忆浮现</div>
   <div class="tab" data-tab="reflection">日印象</div>
   <div class="tab" data-tab="dreams">梦境</div>
   <div class="tab" data-tab="persona">Persona</div>
@@ -1615,6 +1616,128 @@
     <div id="gateway-injections-content" class="gateway-injections-content">
       <div class="gateway-injection-empty">打开 Breath 模拟时读取最近注入记录。</div>
     </div>
+  </div>
+</div>
+
+<div class="content" id="memory-config-view" style="display:none">
+  <div style="max-width:760px;margin:0 auto;">
+    <div class="config-section">
+      <h3>记忆浮现</h3>
+      <div class="config-row">
+        <label>最近记忆</label>
+        <select id="cfg-recent-context-enabled"><option value="true">开启</option><option value="false">关闭</option></select>
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">关闭后 Gateway 不自动注入 Recent Context；可靠直命中和扩散不受影响</div>
+      <div class="config-row">
+        <label>Persona提示</label>
+        <select id="cfg-persona-context-enabled"><option value="true">开启</option><option value="false">关闭</option></select>
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">控制 Gateway 每隔若干轮注入一次 Persona State 提示；关闭后仍会后台更新 Persona</div>
+      <div class="config-row">
+        <label>Persona轮数</label>
+        <input type="number" id="cfg-persona-context-rounds" min="0" max="200" />
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 15；设 0 等同关闭提示注入</div>
+      <div class="config-row">
+        <label>冷却时间</label>
+        <input type="number" id="cfg-gateway-cooldown" min="0" max="168" step="0.5" />
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 6，就是同一条记忆浮现后，6 小时内降低再次出现的概率</div>
+      <div class="config-row">
+        <label>冷却轮数</label>
+        <input type="number" id="cfg-gateway-rounds" min="0" max="50" />
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 5，就是最近 5 轮浮现过的记忆会优先避开</div>
+      <div class="config-row">
+        <label>最近冷却</label>
+        <input type="number" id="cfg-recent-context-cooldown" min="0" max="168" step="0.5" />
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 6，Recent Context 注入后多久不再自动重复注入</div>
+      <div class="config-row">
+        <label>再进入</label>
+        <input type="number" id="cfg-recent-context-reentry" min="0" max="168" step="0.5" />
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 24，小于这个闲置时长不算长时间再进入；设 0 关闭再进入触发</div>
+      <div class="config-row">
+        <label>最近预算</label>
+        <input type="number" id="cfg-recent-context-budget" min="0" max="4000" />
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 300；设 0 可关闭 Recent Context 自动注入</div>
+      <div class="config-row">
+        <label>直命中预算</label>
+        <input type="number" id="cfg-recalled-memory-budget" min="0" max="4000" />
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 400，控制 Recalled Memory 直命中最多带多少内容</div>
+      <div class="config-row">
+        <label>扩散预算</label>
+        <input type="number" id="cfg-related-memory-budget" min="0" max="4000" />
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 220；设 0 可关闭 Gateway 的 Diffused Memory 注入</div>
+      <div class="config-row">
+        <label>直命中形状</label>
+        <select id="cfg-direct-render-mode">
+          <option value="auto">auto</option>
+          <option value="compact">compact</option>
+          <option value="full">full</option>
+        </select>
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">auto：短桶原文，长桶窗口，高价值/细节请求用脱水胶囊</div>
+      <div class="config-row">
+        <label>召回模式</label>
+        <select id="cfg-retrieval-mode">
+          <option value="graph">graph</option>
+          <option value="bucket">bucket</option>
+        </select>
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">graph 是 p0 图召回；bucket 是接近 main 的直命中对照档</div>
+      <div class="config-row">
+        <label>旧记忆随机</label>
+        <select id="cfg-query-resurface-enabled">
+          <option value="false">关闭</option>
+          <option value="true">开启</option>
+        </select>
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认关闭；开启后 query breath 在直命中稀疏时可能追加久未碰过的旧记忆</div>
+      <div class="config-row">
+        <label>图扩散</label>
+        <select id="cfg-diffusion-enabled"><option value="true">开启</option><option value="false">关闭</option></select>
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">关闭后只保留可靠直接命中，不追加 Related/Diffused 背景</div>
+      <div class="config-row">
+        <label>扩散条数</label>
+        <input type="number" id="cfg-diffusion-topk" min="0" max="20" />
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 4，控制最多返回几条扩散背景</div>
+      <div class="config-row">
+        <label>最小激活</label>
+        <input type="number" id="cfg-diffusion-min" min="0" max="10" step="0.01" />
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 0.18，越高越保守</div>
+      <div class="config-row">
+        <label>链式扩散</label>
+        <select id="cfg-chain-walk"><option value="true">开启</option><option value="false">关闭</option></select>
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">允许沿可靠关系继续走，不只是看一跳邻居</div>
+      <div class="config-row">
+        <label>链路深度</label>
+        <input type="number" id="cfg-chain-hops" min="1" max="12" />
+      </div>
+      <div class="config-row">
+        <label>链路置信</label>
+        <input type="number" id="cfg-chain-confidence" min="0" max="1" step="0.01" />
+      </div>
+      <div class="config-row">
+        <label>链路前沿</label>
+        <input type="number" id="cfg-chain-frontier" min="1" max="200" />
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">保存后 breath 和 Gateway 都会立即读取新的扩散参数</div>
+    </div>
+
+    <div style="display:flex;gap:12px;margin-top:8px;">
+      <button class="btn-primary" onclick="saveConfig(false)">应用（仅运行时）</button>
+      <button class="btn-secondary" onclick="saveConfig(true)">应用并写入 config.yaml</button>
+    </div>
+    <div id="memory-config-status" style="margin-top:16px;font-size:13px;"></div>
   </div>
 </div>
 
@@ -1834,103 +1957,6 @@
     </div>
 
     <div class="config-section">
-      <h3>记忆浮现</h3>
-      <div class="config-row">
-        <label>冷却时间</label>
-        <input type="number" id="cfg-gateway-cooldown" min="0" max="168" step="0.5" />
-      </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 6，就是同一条记忆浮现后，6 小时内降低再次出现的概率</div>
-      <div class="config-row">
-        <label>冷却轮数</label>
-        <input type="number" id="cfg-gateway-rounds" min="0" max="50" />
-      </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 5，就是最近 5 轮浮现过的记忆会优先避开</div>
-      <div class="config-row">
-        <label>最近冷却</label>
-        <input type="number" id="cfg-recent-context-cooldown" min="0" max="168" step="0.5" />
-      </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 6，Recent Context 注入后多久不再自动重复注入</div>
-      <div class="config-row">
-        <label>再进入</label>
-        <input type="number" id="cfg-recent-context-reentry" min="0" max="168" step="0.5" />
-      </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 24，小于这个闲置时长不算长时间再进入；设 0 关闭再进入触发</div>
-      <div class="config-row">
-        <label>最近预算</label>
-        <input type="number" id="cfg-recent-context-budget" min="0" max="4000" />
-      </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 300；设 0 可关闭 Recent Context 自动注入</div>
-      <div class="config-row">
-        <label>直命中预算</label>
-        <input type="number" id="cfg-recalled-memory-budget" min="0" max="4000" />
-      </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 400，控制 Recalled Memory 直命中最多带多少内容</div>
-      <div class="config-row">
-        <label>扩散预算</label>
-        <input type="number" id="cfg-related-memory-budget" min="0" max="4000" />
-      </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 220；设 0 可关闭 Gateway 的 Diffused Memory 注入</div>
-      <div class="config-row">
-        <label>直命中形状</label>
-        <select id="cfg-direct-render-mode">
-          <option value="auto">auto</option>
-          <option value="compact">compact</option>
-          <option value="full">full</option>
-        </select>
-      </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">auto：短桶原文，长桶窗口，高价值/细节请求用脱水胶囊</div>
-      <div class="config-row">
-        <label>召回模式</label>
-        <select id="cfg-retrieval-mode">
-          <option value="graph">graph</option>
-          <option value="bucket">bucket</option>
-        </select>
-      </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">graph 是 p0 图召回；bucket 是接近 main 的直命中对照档</div>
-      <div class="config-row">
-        <label>旧记忆随机</label>
-        <select id="cfg-query-resurface-enabled">
-          <option value="false">关闭</option>
-          <option value="true">开启</option>
-        </select>
-      </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认关闭；开启后 query breath 在直命中稀疏时可能追加久未碰过的旧记忆</div>
-      <div class="config-row">
-        <label>图扩散</label>
-        <select id="cfg-diffusion-enabled"><option value="true">开启</option><option value="false">关闭</option></select>
-      </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">关闭后只保留可靠直接命中，不追加 Related/Diffused 背景</div>
-      <div class="config-row">
-        <label>扩散条数</label>
-        <input type="number" id="cfg-diffusion-topk" min="0" max="20" />
-      </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 4，控制最多返回几条扩散背景</div>
-      <div class="config-row">
-        <label>最小激活</label>
-        <input type="number" id="cfg-diffusion-min" min="0" max="10" step="0.01" />
-      </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 0.18，越高越保守</div>
-      <div class="config-row">
-        <label>链式扩散</label>
-        <select id="cfg-chain-walk"><option value="true">开启</option><option value="false">关闭</option></select>
-      </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">允许沿可靠关系继续走，不只是看一跳邻居</div>
-      <div class="config-row">
-        <label>链路深度</label>
-        <input type="number" id="cfg-chain-hops" min="1" max="12" />
-      </div>
-      <div class="config-row">
-        <label>链路置信</label>
-        <input type="number" id="cfg-chain-confidence" min="0" max="1" step="0.01" />
-      </div>
-      <div class="config-row">
-        <label>链路前沿</label>
-        <input type="number" id="cfg-chain-frontier" min="1" max="200" />
-      </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">保存后 breath 和 Gateway 都会立即读取新的扩散参数</div>
-    </div>
-
-    <div class="config-section">
       <h3>记忆关系整理</h3>
       <div class="config-row">
         <label>日印象</label>
@@ -2110,6 +2136,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     const target = tab.dataset.tab;
     document.getElementById('list-view').style.display = target === 'list' ? '' : 'none';
     document.getElementById('breath-view').style.display = target === 'breath' ? '' : 'none';
+    document.getElementById('memory-config-view').style.display = target === 'memory-config' ? '' : 'none';
     document.getElementById('reflection-view').style.display = target === 'reflection' ? '' : 'none';
     document.getElementById('dreams-view').style.display = target === 'dreams' ? '' : 'none';
     document.getElementById('persona-view').style.display = target === 'persona' ? '' : 'none';
@@ -2117,6 +2144,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.getElementById('config-view').style.display = target === 'config' ? '' : 'none';
     document.getElementById('import-view').style.display = target === 'import' ? '' : 'none';
     if (target === 'breath') loadGatewayInjections();
+    if (target === 'memory-config') loadConfig();
     if (target === 'reflection') renderReflectionReview();
     if (target === 'dreams') loadDreams();
     if (target === 'persona') loadPersona();
@@ -3854,10 +3882,15 @@ async function loadConfig() {
       (cfg.gateway && cfg.gateway.recent_context_reentry_idle_hours) ?? 24;
     document.getElementById('cfg-recent-context-budget').value =
       (cfg.gateway && cfg.gateway.recent_context_budget) ?? 300;
+    document.getElementById('cfg-recent-context-enabled').value =
+      ((cfg.gateway && cfg.gateway.recent_context_budget) ?? 300) > 0 ? 'true' : 'false';
     document.getElementById('cfg-recalled-memory-budget').value =
       (cfg.gateway && cfg.gateway.recalled_memory_budget) ?? 400;
     document.getElementById('cfg-related-memory-budget').value =
       (cfg.gateway && cfg.gateway.related_memory_budget) ?? 220;
+    var personaRounds = (cfg.gateway && cfg.gateway.current_inner_state_interval_rounds) ?? 15;
+    document.getElementById('cfg-persona-context-enabled').value = personaRounds > 0 ? 'true' : 'false';
+    document.getElementById('cfg-persona-context-rounds').value = personaRounds;
     document.getElementById('cfg-direct-render-mode').value = (cfg.gateway && cfg.gateway.direct_render_mode) || 'auto';
     document.getElementById('cfg-retrieval-mode').value = (cfg.gateway && cfg.gateway.retrieval_mode) || 'graph';
     document.getElementById('cfg-query-resurface-enabled').value =
@@ -3883,9 +3916,15 @@ async function loadConfig() {
       'Dream API: <strong>' + (cfg.dream.api_ready ? '已设置' : '未设置') + '</strong><br>' +
       'Embedding effective URL: <strong>' + esc(cfg.embedding.effective_base_url || '未设置') + '</strong>';
   } catch (e) {
-    document.getElementById('config-status').innerHTML =
-      '<span style="color:var(--negative)">加载失败: ' + esc(e.message) + '</span>';
+    setConfigStatus('<span style="color:var(--negative)">加载失败: ' + esc(e.message) + '</span>');
   }
+}
+
+function setConfigStatus(html) {
+  ['config-status', 'memory-config-status'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.innerHTML = html;
+  });
 }
 
 async function saveConfig(persist) {
@@ -3897,6 +3936,13 @@ async function saveConfig(persist) {
     var n = parseFloat(document.getElementById(id).value);
     return Number.isFinite(n) ? n : fallback;
   }
+
+  var recentContextEnabled = document.getElementById('cfg-recent-context-enabled').value === 'true';
+  var recentContextBudget = recentContextEnabled ? numberValue('cfg-recent-context-budget', 300) : 0;
+  if (recentContextEnabled && recentContextBudget <= 0) recentContextBudget = 300;
+  var personaContextEnabled = document.getElementById('cfg-persona-context-enabled').value === 'true';
+  var personaContextRounds = personaContextEnabled ? numberValue('cfg-persona-context-rounds', 15) : 0;
+  if (personaContextEnabled && personaContextRounds <= 0) personaContextRounds = 15;
 
   var body = {
     dehydration: {
@@ -3926,9 +3972,10 @@ async function saveConfig(persist) {
       skip_recent_rounds: numberValue('cfg-gateway-rounds', 5),
       recent_context_cooldown_hours: floatValue('cfg-recent-context-cooldown', 6),
       recent_context_reentry_idle_hours: floatValue('cfg-recent-context-reentry', 24),
-      recent_context_budget: numberValue('cfg-recent-context-budget', 300),
+      recent_context_budget: recentContextBudget,
       recalled_memory_budget: numberValue('cfg-recalled-memory-budget', 400),
       related_memory_budget: numberValue('cfg-related-memory-budget', 220),
+      current_inner_state_interval_rounds: personaContextRounds,
       direct_render_mode: document.getElementById('cfg-direct-render-mode').value,
       retrieval_mode: document.getElementById('cfg-retrieval-mode').value,
     },
@@ -3958,8 +4005,6 @@ async function saveConfig(persist) {
   if (embKeyVal) body.embedding.api_key = embKeyVal;
   var dreamKeyVal = document.getElementById('cfg-dream-key').value;
   if (dreamKeyVal) body.dream.api_key = dreamKeyVal;
-
-  var status = document.getElementById('config-status');
   try {
     var res = await authFetch(BASE + '/api/config', {
       method: 'POST',
@@ -3969,13 +4014,13 @@ async function saveConfig(persist) {
     if (!res) return;
     var result = await res.json();
     if (result.ok) {
-      status.innerHTML = '<span style="color:var(--positive)">✓ 已更新: ' + esc((result.updated || []).join(', ')) + '</span>';
+      setConfigStatus('<span style="color:var(--positive)">✓ 已更新: ' + esc((result.updated || []).join(', ')) + '</span>');
       loadConfig();
     } else {
-      status.innerHTML = '<span style="color:var(--negative)">✗ ' + esc(result.error || '未知错误') + '</span>';
+      setConfigStatus('<span style="color:var(--negative)">✗ ' + esc(result.error || '未知错误') + '</span>');
     }
   } catch (e) {
-    status.innerHTML = '<span style="color:var(--negative)">✗ 请求失败: ' + esc(e.message) + '</span>';
+    setConfigStatus('<span style="color:var(--negative)">✗ 请求失败: ' + esc(e.message) + '</span>');
   }
 }
 
