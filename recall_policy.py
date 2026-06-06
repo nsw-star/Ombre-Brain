@@ -97,6 +97,62 @@ OLD_OR_RESOLVED_QUERY_MARKERS = frozenset(
     }
 )
 CAUTION_CONTEXT_MODES = frozenset({"reflective_repair", "conflict_repair"})
+RESPONSE_ACTION_QUERY_MARKERS = frozenset(
+    {
+        "回复",
+        "回一下",
+        "回个",
+        "评论",
+        "留言",
+        "跟个",
+        "跟一句",
+        "说个",
+        "说一句",
+        "发个",
+        "发一句",
+        "补个",
+        "补一句",
+        "嗯",
+    }
+)
+RESPONSE_ACTION_FILLER_TERMS = frozenset(
+    {
+        "要不要",
+        "要不",
+        "是否",
+        "是不是",
+        "需不需要",
+        "需要",
+        "可以",
+        "可不可以",
+        "能不能",
+        "回复一下",
+        "回一下",
+        "回个",
+        "回复",
+        "评论一下",
+        "评论",
+        "留言",
+        "跟个",
+        "跟一句",
+        "说个",
+        "说一句",
+        "发个",
+        "发一句",
+        "补个",
+        "补一句",
+        "或者",
+        "还是",
+        "这条帖子",
+        "那条帖子",
+        "帖子",
+        "这条消息",
+        "那条消息",
+        "消息",
+        "嗯嗯",
+        "嗯",
+    }
+)
 AUTO_VAGUE_RECALL_MARKERS = frozenset(
     {
         "上下文",
@@ -120,6 +176,7 @@ AUTO_VAGUE_RECALL_MARKERS = frozenset(
         "这个",
         "这个图",
         "这条",
+        "那次",
         "那条",
         "那个",
         "相关",
@@ -160,6 +217,7 @@ AUTO_VAGUE_FILLER_TERMS = frozenset(
         "现在",
         "当前",
         "这次",
+        "那次",
         "想起来",
         "想起",
         "想到了",
@@ -380,6 +438,8 @@ class RecallPolicy:
             return False
         if self._is_affect_only_query(text):
             return True
+        if self._is_context_free_response_action_query(text):
+            return True
         lowered = text.lower()
         if not any(marker in lowered for marker in AUTO_VAGUE_RECALL_MARKERS):
             return False
@@ -438,6 +498,28 @@ class RecallPolicy:
                 stripped = stripped.replace(cleaned, "")
         stripped = re.sub(r"[我你他她它的是了嘛吗呢啊呀欸诶吧哈嗯呜有里看查找问说]+", "", stripped)
         return len(stripped) >= 2
+
+    def _is_context_free_response_action_query(self, query: str) -> bool:
+        lowered = str(query or "").lower()
+        if not any(marker in lowered for marker in RESPONSE_ACTION_QUERY_MARKERS):
+            return False
+        compact = re.sub(r"[\s，。！？、,.!?:：;；~～♡❤♥（）()\[\]【】「」『』“”\"'`-]+", "", lowered)
+        stripped = compact
+        removable = list(
+            RESPONSE_ACTION_FILLER_TERMS
+            | AUTO_VAGUE_FILLER_TERMS
+            | set(self.options.context_terms)
+        )
+        for term in sorted(removable, key=len, reverse=True):
+            cleaned = re.sub(r"\s+", "", str(term or "").lower())
+            if cleaned:
+                stripped = stripped.replace(cleaned, "")
+        stripped = re.sub(
+            r"[我你他她它的是了嘛吗呢啊呀欸诶吧哈嗯呜有里看查找问说]+",
+            "",
+            stripped,
+        )
+        return len(stripped) < 2
 
     def _is_affect_only_query(self, query: str) -> bool:
         compact = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(query or "").lower())

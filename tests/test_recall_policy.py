@@ -74,8 +74,13 @@ def test_auto_vague_query_without_topic_is_suppressed():
     assert policy.is_auto_query_too_vague("今天怎么样")
     assert policy.is_auto_query_too_vague("开心^^")
     assert policy.is_auto_query_too_vague("我有点难过。")
+    assert policy.is_auto_query_too_vague("要不要回复一下。或者跟个“嗯。”")
+    assert policy.is_auto_query_too_vague("那次要不要回个嗯")
+    assert policy.is_auto_query_too_vague("这条帖子可以评论一下吗")
     assert not policy.is_auto_query_too_vague("最近少女暴君")
     assert not policy.is_auto_query_too_vague("今天猫咪药量")
+    assert not policy.is_auto_query_too_vague("折角那次要不要回复")
+    assert not policy.is_auto_query_too_vague("花园帖子要不要回复")
     assert not policy.is_auto_query_too_vague("handoff bridge 注入 读图 原文")
 
     decision = policy.assess(

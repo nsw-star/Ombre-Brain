@@ -3715,10 +3715,18 @@ def test_gateway_recent_context_stays_on_explicit_topic(
     assert "双向触碰硬件" not in injected
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "这张图片的上下文我想起来了",
+        "要不要回复一下。或者跟个“嗯。”",
+    ],
+)
 def test_gateway_auto_vague_query_suppresses_recent_and_dynamic_memory(
     monkeypatch,
     test_config,
     bucket_mgr,
+    query,
 ):
     cfg = _gateway_config(
         test_config,
@@ -3754,7 +3762,7 @@ def test_gateway_auto_vague_query_suppresses_recent_and_dynamic_memory(
                 "Authorization": "Bearer gateway-secret",
                 "X-Ombre-Session-Id": "sess-recent-vague",
             },
-            json={"messages": [{"role": "user", "content": "这张图片的上下文我想起来了"}]},
+            json={"messages": [{"role": "user", "content": query}]},
         )
 
     assert response.status_code == 200
