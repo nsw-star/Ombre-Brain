@@ -1,32 +1,32 @@
 # Ombre Brain - Haven/Rain Fork
 
-这是 [P0luz/Ombre-Brain](https://github.com/P0luz/Ombre-Brain) 的二次开发版本。原版是一套给 Claude 使用的长期情绪记忆 MCP；这个 fork 在原版的 Markdown bucket、情绪坐标、遗忘曲线、MCP 工具、Dashboard、向量检索基础上，增加了 Gateway 自动注入、Persona State、长期锚点、关系天气、年轮评论、whisper、Night Dream、Supabase 同步和 ChatGPT Connector OAuth。
+这是 [P0luz/Ombre-Brain](https://github.com/P0luz/Ombre-Brain) 的二次开发版本。原版是一套给 Claude 使用的长期情绪记忆 MCP；这个 fork 在原版的 Markdown bucket、情绪坐标、遗忘曲线、MCP 工具、Dashboard、向量检索基础上，增加了 Gateway 自动注入、Memory Moment/Edge 图召回、Persona State、Portrait/Handoff、长期锚点、关系天气、年轮评论、whisper、Darkroom、跨窗口短时上下文、Supabase 同步和 ChatGPT Connector OAuth。
 
 本 README 以本 fork 的运行方式为准。原版 Docker Hub 预构建镜像、`docker-compose.user.yml`、Render / Zeabur 快速部署方式不包含这些 fork 能力，因此这里不再保留原版快速部署教程。
 
 ## 先读这个
 
 - 这是一个个性化 fork，不是原版 Ombre-Brain 的无改动镜像。
+- 当前 `main` 是新版主线，已包含原 `feature/memory-diffusion-p0` 的 Gateway、画像、handoff、Darkroom 和短时上下文能力；旧主线留档在 `archive/main-before-p0-20260607`。
 - 原版代码仍遵循原项目 MIT License；本 fork 新增内容允许个人学习、自用和非商业二改，商业使用需另行取得授权。详见 [`NOTICE.md`](NOTICE.md)。
 - 默认人设、提示词和年轮作者使用 `config.yaml` 里的 `identity` 名字；示例默认是 `Haven`、`Rain`、`小雨/xiaoyu`。
 - 生产部署建议使用源码构建，并同时运行 `ombre-brain` 和 `ombre-gateway` 两个服务。
 - bucket 数据和运行状态必须放在持久化目录里；`state` 不建议放进任何双向同步目录。
 - `X-Ombre-Session-Id` 是本 fork 的 Gateway 会话头，不是 OpenAI 标准字段。它像 Persona 的“房间号”：同一个值会共用同一份 persona_state 和召回冷却记录。可以自己起，比如 `my-main`、`chat-main`，不要照抄旧文档里的 `xiaoyu-main`。
-- 给 Operit 或其它聊天平台写工具使用清单时，先区分 MCP 工具模式和 Gateway 自动注入模式，参考 [`docs/Tool Guide.md`](<docs/Tool Guide.md>)。记得重新复制这份 Tool Guide 到客户端；旧工具说明不会知道 `mode="handoff"`、`is_session_start`、`introspection()` 和梦境浮现规则。
+- 给 Operit 或其它聊天平台写工具使用清单时，先区分 MCP 工具模式和 Gateway 自动注入模式，参考 [`docs/Tool Guide.md`](<docs/Tool Guide.md>)。记得重新复制这份 Tool Guide 到客户端；旧工具说明不会知道 `is_session_start`、`mode="handoff"`、query breath、`darkroom_enter` 和调试工具边界。
 
-## 2026-05-25 更新提醒
+## 2026-06-07 主线提醒
 
-这次主要是夜梦、冷却和配置写法：
+这次把原 `feature/memory-diffusion-p0` 的新版能力扶正为 `main`。如果需要旧主线，请切 `archive/main-before-p0-20260607`。
 
-- 新增 Night Dream：后台夜里用小模型生成潜伏梦，Dashboard 只显示“做了一个梦”，正文只可能在 `breath()` 共振时浮现一次。
-- `introspection()` 是原 `dream()` 自省入口的新名字；原入口仍可用，会提示新名字并返回同样内容。真正夜梦由后台生成，不需要客户端主动调用。
-- `breath()` 支持 handoff 轻交接；新会话开头传 `is_session_start=true` 即可，只恢复 Persona、用户画像、关系画像、近期连续性和少量必要锚点。`mode="handoff"` 是显式等价入口。
-- Gateway 动态记忆冷却默认从 `48h` 改为 `6h`，`cooldown_hours` 和 `skip_recent_rounds` 可以在 Dashboard 的“记忆浮现”里设置。
+- 新窗口/醒来/换窗：优先 `breath(is_session_start=true)` 或 `breath(mode="handoff")`，返回 Persona、User Portrait、Relationship Portrait、Recent Continuity 和少量 Optional Anchors；具体事件继续用 `breath(query="关键词或原句")` 查。
+- `Recent Continuity` 由按真实日期维护的 handoff recent summary、关系天气和短 trace 组成，不再把初次画像初始化摘要伪装成当天日记。
+- Gateway 会记录轻量 `conversation_turns`。遇到“刚刚/刚才/刚说/上一句/暗号”等短时跨窗口问题时，优先注入 Just Now Chat Context，并跳过默认记忆查询。
+- Gateway 的日期问题会给小段 Date Persona Trace；如果本轮已有 Handoff Context，默认跳过泛泛的 Recent Context，避免 handoff、recent_context 和 query breath 重复塞。
+- Daily Portrait Maintainer 会维护用户画像、Haven persona、关系画像和“最近在做什么”，只写 `state/portrait_state.json`，不直接写长期记忆；Dashboard 可手动生成/刷新。
+- Darkroom 用来放未想透、不该给用户看、不该进普通记忆的内在反思；外部工具清单只暴露 `darkroom_enter`。
+- 外部 MCP 工具清单已收窄：日常只保留使用者该调用的工具，`enrich_backfill`、`edge_backfill`、`inspect_diffusion`、`inspect_moments` 等调试工具只在明确修记忆系统时使用。
 - embedding 推荐用 `OMBRE_EMBEDDING_*` 环境变量。不要把 `embedding.api_key_env` 当成推荐写法；`api_key_env` 是 `gateway.upstreams[*]` 引用上游模型 key 的字段。
-- MCP 写入不再等待 embedding API 刷新完成；`hold/grow/comment_bucket/trace` 会先写 bucket 并返回，embedding 在后台补。写入时语义查旧记忆最多等 `write_path.semantic_search_timeout_seconds` 秒。
-- `reflection.enrich_backfill_enabled` 默认开启；定时器会少量补跑缺失 `confidence/tags/memory_edges` 的旧 bucket，适合修复过去 enrich 超时导致的 `memory_edges: 0`。
-- `streamable-http` / `sse` 启动时会主动拉起 decay engine，`/health` 不应再长期显示 `decay_engine: stopped`。
-- Dashboard 写配置时，如果 Docker 挂载的 `/app/config.yaml` 是只读，会自动写到 `/state/config.runtime.yaml`。
 
 ## 二次开发能力
 
@@ -50,7 +50,9 @@
 | OpenAI / Anthropic-compatible Gateway | 提供 `/v1/chat/completions`、`/v1/messages`、`/v1/models`，聊天客户端可直接接入 | `gateway.py` |
 | 自动记忆注入 | 请求转发前按策略注入 Recent Context、Recalled Memory、Diffused Memory；Long-term State Summary 按间隔出现 | `gateway.py` |
 | Persona State Engine | 保存 AI 回复后的全局人格、关系状态、每个 session 的短期心情 | `persona_engine.py` |
+| Portrait / Handoff | 每日维护 Persona、用户画像、关系画像和近期状态；新窗口用 `is_session_start=true` 或 `mode="handoff"` 恢复身份与生活背景 | `portrait_engine.py`、`server.py`、`dashboard.html` |
 | 召回冷却 | 按 `X-Ombre-Session-Id` 记录轮次和最近注入，避免同一条记忆反复贴脸 | `gateway_state.py` |
+| 跨窗口短时上下文 | Gateway 记录成功聊天轮次；遇到“刚刚/刚才/上一句/暗号”等短时问题时注入 Just Now Chat Context，优先回答最近几轮而不是查长期记忆 | `gateway.py`、`gateway_state.py` |
 | 多上游模型路由和备用 key | `gateway.upstreams` 可配置多个 OpenAI-compatible provider，按请求里的 `model` 路由；同一上游可配置多个 key，失败时自动尝试下一个 | `gateway.py`、`config.example.yaml` |
 | 工具调用和流式兼容 | 透传 `tools / tool_choice / tool_calls`，支持 SSE 流式响应，兼容部分 reasoning_content 场景；Persona post-reply 评估会跳过带 `tool_calls` 的 assistant 中间态，只评估最终自然语言回复 | `gateway.py` |
 | Memory Edge / Node | 自动生成显式记忆关系边；`memory_nodes.sqlite` 为 bucket 生成 salience 与 facets，Gateway 和 `breath()` 可沿边做多跳联想浮现 | `memory_edges.py`、`memory_nodes.py`、`memory_diffusion.py`、`reflection_engine.py` |
@@ -58,6 +60,7 @@
 | 长期锚点 Anchor | 介于普通浮现和 pinned/permanent 之间的长期记忆位。`anchor=true` 的普通 bucket 不混入普通权重池，`breath()` 会用独立槽位少量带出，适合经过时间验证、未来仍需要被想起的关系锚点或项目锚点 | `server.py`、`dashboard.html` |
 | Relationship Weather | 日印象保存为 `type=feel`，默认不单独注入，可在面板观察或按配置开启注入 | `reflection_engine.py` |
 | Night Dream | 后台夜里用小模型生成潜伏梦，默认走 DeepSeek 官方 API `deepseek-v4-flash`；素材来自最近普通记忆和 whisper，素材够时按每日概率决定是否入梦；`breath()` 命中共振时按 `===== 梦境 =====` 块浮现一次，Dashboard 只显示做梦记录不展示正文 | `dream_engine.py`、`server.py`、`dashboard.html` |
+| Darkroom | 保存未想透、不该给用户看、不该进普通记忆的内在反思；默认只作为私密暗房保留，外部工具清单只开放 `darkroom_enter` | `darkroom.py`、`server.py`、`dashboard.html` |
 | 年轮 comments | 将再次阅读某条记忆时的感受挂到源 bucket 的 `metadata.comments` 下；旧 feel 可迁移成源记忆年轮 | `bucket_manager.py`、`server.py`、`dashboard.html` |
 | whisper | 无源碎碎念/悄悄话独立保存为 `type=feel + whisper` 标签，可用 `breath(domain="whisper")` 单独读取 | `server.py` |
 | Dashboard 编辑 | 支持正文编辑、前端用户年轮写入/删除、日印象月历、Persona 面板、网络图、手动 reflect；日印象页按日期显示完整日印象，不再做情绪天气图 | `dashboard.html`、`server.py` |
@@ -70,7 +73,7 @@
 ```text
 聊天客户端
   -> Ombre Gateway :18002
-    -> 读取 buckets / embeddings / persona_state / gateway_state / memory_edges
+    -> 读取 buckets / embeddings / persona_state / portrait_state / gateway_state / memory_edges
     -> 拼隐藏上下文
     -> 转发上游模型
     -> 回复成功后更新 Persona State 和召回记录
@@ -104,13 +107,15 @@ bucket 是 Markdown 文件，正文保存记忆内容，frontmatter 保存元数
 
 ```text
 embeddings.db       # 向量语义检索
-gateway_state.db    # 每个 session 的轮次、最近注入、冷却
+gateway_state.db    # 每个 session 的轮次、最近注入、冷却、轻量 conversation_turns
 persona_state.db    # Persona 全局状态、关系状态、会话心情
+portrait_state.json # 每日维护的 Persona/User/Relationship/Recent portrait
 memory_edges.jsonl  # 显式记忆关系边
 .dashboard_auth.json
 config.runtime.yaml # Dashboard 写入的运行时配置补丁
 dreams/dream_*.md   # 潜伏梦正文；浮现一次后删除
 dreams/logs/events.jsonl # 夜梦生成、浮现、删除事件
+darkroom/           # 私密暗房笔记
 ```
 
 时间默认使用 `Asia/Shanghai`。`utils.now_iso()` 会生成东八区时间。
@@ -135,8 +140,10 @@ dreams/logs/events.jsonl # 夜梦生成、浮现、删除事件
 ```text
 identity.py             # prompt 和年轮作者的名字来源
 persona_engine.py       # Persona prompt、Long-term State Summary 文案
+portrait_engine.py      # Persona/User/Relationship portrait 和 handoff recent summary
 reflection_engine.py    # 日印象、日记摘记、user/AI 改写规则
 dream_engine.py         # 后台夜梦、潜伏存储、breath 共振浮现
+darkroom.py             # 私密暗房存储与只进不出的默认边界
 dehydrator.py           # 长内容摘记命名规则
 server.py               # MCP / Dashboard 年轮作者
 dashboard.html          # Dashboard：桶列表、年轮删除、日印象月历、梦境记录、Persona、网络、配置和导入
@@ -717,7 +724,7 @@ breath(domain="whisper", max_tokens=1200)
 当前缺陷：
 
 ```text
-1. retrieval_mode="bucket" 只作为可选对照模式；默认 graph 模式仍更适合观察 p0 的 moment 扩散链。
+1. `retrieval_mode="bucket"` 只作为可选对照模式；默认 graph 模式是当前 `main` 的 moment 扩散链。
 2. 有 query 的 breath 默认不会随机带出 “--- 久未碰过 ---”。如果想恢复旧的随机回响，显式设置 `recall.query_resurface_enabled=true`，或者直接调用 `resurface()`。
 3. 联想浮现来自 moment_edges 与 memory_edges 的桥接边；embedding 相似边主要用于候选检索，不等于手写关系。当前 moment_edges 是 deterministic 前后文/温度边，LLM/embedding 增量建边留给后续 CLI worker。
 ```
