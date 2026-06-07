@@ -540,6 +540,8 @@ portrait:
   max_tokens: 1800
   material_limit: 18
   first_run_material_limit: 160
+  source_excerpt_chars: 900
+  recent_continuity_days: 3
   persona_events_limit: 24
   recent_buffer_max: 24
   staging_pool_max: 24

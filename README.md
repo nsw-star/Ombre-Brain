@@ -188,8 +188,12 @@ cp config.example.yaml /srv/ombre-brain/config.yaml
 - `gateway.recent_context_cooldown_hours`：`Recent Context` 自动注入后的冷却小时，默认 `6`。
 - `gateway.recent_context_reentry_idle_hours`：闲置多久算长时间再进入，默认 `24`；设 `0` 可关闭再进入触发。
 - `gateway.recent_context_budget`：`Recent Context` 预算，默认 `300`；设 `0` 可关闭这块自动注入。
+- `gateway.just_now_context_*`：控制“刚刚/刚才/上一句/暗号”这类跨窗口短时上下文，默认开启。
+- `gateway.date_persona_trace_*`：控制“昨天/昨晚/前天/明确日期”这类问题的小段日期 trace，默认开启。
 - `gateway.recalled_memory_budget`：`Recalled Memory` 直命中预算，默认 `400`。
 - `gateway.related_memory_budget`：`Diffused Memory` 扩散背景预算，默认 `220`；设 `0` 可关闭 Gateway 扩散注入。
+- `gateway.direct_render_mode` / `retrieval_mode`：控制直命中展示形状和 `graph|bucket` 召回路线；默认 `auto` + `graph`。
+- `gateway.portrait_memory_*`：控制 Gateway 是否注入只读画像事实缓存，默认开启，只读取 `profile_fact` 和选中的 anchor，不读 pinned/protected。
 - `recall.query_resurface_enabled`：是否允许有 query 的 `breath()` 随机追加久未碰过的旧记忆，默认 `false`。
 - `embedding.model/base_url`：embedding 模型和地址；key 推荐放 `.env` 的 `OMBRE_EMBEDDING_API_KEY`。
 - `write_path.semantic_search_timeout_seconds`：写入时找“只读相关旧记忆”的语义检索最多等待几秒，默认 `3`。网络慢时会跳过语义部分，不影响写入成功。
@@ -197,6 +201,7 @@ cp config.example.yaml /srv/ombre-brain/config.yaml
 - `identity.*`：改 AI 名、前端用户作者名、prompt 里的用户称呼和亲密称呼。
 - `persona.profile_id`：改成自己的稳定 id，避免和示例部署共用同一份 Persona 状态身份。
 - `persona.*`：改成自己的 Persona 模型和关系默认值。
+- `portrait.*`：每日维护 Persona/User/Relationship/Recent portrait；默认不开自动初次全库初始化，第一次建议在 Dashboard 手动生成。
 - `reflection.timezone`：默认 `Asia/Shanghai`。
 - `reflection.enrich_backfill_enabled/enrich_backfill_limit`：默认每次反思定时器顺手补少量缺失 enrich 的普通 bucket，用来恢复 tags/confidence/memory_edges。
 - `reflection.diary_mcp_url` / `diary_mcp_token_env`：只有接 Haven-diary/RiJi 时再启用；不使用日记系统就留空，并关闭 `reflection.diary_memory_extract_enabled`。
@@ -407,13 +412,14 @@ curl -sS http://127.0.0.1:18002/health
 ```bash
 cd /opt/Ombre-Brain
 git status --short
-git pull --ff-only origin main
-docker compose -f compose.hk.yml up -d --build --force-recreate ombre-brain ombre-gateway
+COMPOSE_FILE=compose.hk.yml bash scripts/update_deploy.sh
 curl -sS http://127.0.0.1:18001/health
 curl -sS http://127.0.0.1:18002/health
 ```
 
-如果 VPS 上有直接改动，先 `git stash push -u -m pre-deploy-direct-vps-edits-$(date +%Y%m%d-%H%M%S)`，再 pull。
+2026-06-07 之后，旧 `main` 已换到新版主线。老部署目录如果还停在旧 `main`，不要手动普通 `git pull`；直接运行 `scripts/update_deploy.sh`。脚本会在 tracked 文件干净时把旧 HEAD 备份成 `archive/local-main-before-reset-*`，再切到新版 `origin/main`。`.env`、`buckets/`、`state/` 这类未跟踪/挂载文件不会因此删除。
+
+如果 VPS 上有直接改过仓库里的 tracked 文件，脚本会停下。先 `git stash push -u -m pre-deploy-direct-vps-edits-$(date +%Y%m%d-%H%M%S)`，再重新运行更新脚本。
 
 ## 客户端接入
 
@@ -1109,7 +1115,7 @@ docker compose -f compose.hk.yml exec -T ombre-brain python scripts/cleanup_migr
 - `./ob`：短入口，等同于 `bash scripts/one_click.sh`。也可以在菜单里选“安装短命令 ob”，写入当前用户的 shell 配置；之后任意位置输入 `ob` 就能打开菜单。
 - Windows 上运行 `.sh` 脚本建议打开 Git Bash 再执行；不要在 PowerShell 里直接输 `bash ...`，否则少数机器可能会调用到 WSL 的 `bash.exe`。
 - `scripts/doctor.sh`：适合“更新后不能用、端口不通、怀疑 key 没配好”。它只读检查，不会重启服务、不改配置、不打印 key。会提示 `.env/config.yaml`、Docker Compose 状态、健康接口、容器内环境变量和最近错误日志；如果 compose 里没有启用 Gateway，会自动跳过 Gateway token 检查。
-- `scripts/update_deploy.sh`：适合“我只想更新到最新版”。它会 `git pull --ff-only`，如果 compose 里是 `build:` 就重建镜像，否则先 pull 镜像，再启动容器，最后做健康检查。
+- `scripts/update_deploy.sh`：适合“我只想更新到最新版”。它会从当前分支或 `OMBRE_BRANCH` 指定分支拉取代码；能 fast-forward 就直接前进，遇到 2026-06-07 主线换轨这类分叉时，会在 tracked 文件干净的部署目录里先建本地备份分支再 reset 到新版远端。之后如果 compose 里是 `build:` 就重建镜像，否则先 pull 镜像，再启动容器，最后做健康检查。
 - `scripts/embedding_backfill.sh`：只补缺失的 embedding，适合升级后发现部分记忆没有语义召回。
 - `scripts/embedding_rebuild.sh`：重建全部 embedding，适合 embedding 模型、base_url 或 embedding 文本格式改过之后使用。它会消耗更多 API 次数。
 - `scripts/embedding_cleanup_orphans.sh`：检查 `embeddings.db` 里已经没有对应 bucket 文件的记录，并要求输入确认后删除；确认已备份且要非交互执行时可追加 `--yes`。

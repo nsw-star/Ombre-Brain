@@ -432,6 +432,8 @@ gateway:
   port: 8010
   default_session_id: "main"
   head_recent_hours: 72
+  recent_context_reentry_idle_hours: 24
+  recent_context_cooldown_hours: 6
   dynamic_top_k: 10
   inject_max_cards: 2
   skip_recent_rounds: 5
@@ -439,7 +441,22 @@ gateway:
   cooldown_floor: 0.3
   inject_total_budget: 1200
   recent_context_budget: 300
+  just_now_context_enabled: true
+  just_now_context_hours: 6
+  just_now_context_max_turns: 5
+  just_now_context_budget: 420
+  conversation_turns_max_entries: 500
+  date_persona_trace_enabled: true
+  date_persona_trace_budget: 220
+  date_persona_trace_max_events: 5
+  date_persona_trace_include_daily: true
   recalled_memory_budget: 400
+  direct_render_mode: "auto"
+  retrieval_mode: "graph"
+  portrait_memory_enabled: true
+  portrait_memory_budget: 360
+  portrait_memory_max_sources: 8
+  portrait_memory_include_anchors: true
   relationship_weather_budget: 220
   favorite_memory_budget: 180
   favorite_memory_max_cards: 1
@@ -459,6 +476,29 @@ persona:
   thinking_mode: ""
   temperature: 0.1
   max_tokens: 500
+
+portrait:
+  enabled: true
+  auto_enabled: true
+  auto_initial_enabled: false
+  daily_enabled: true
+  timezone: "Asia/Shanghai"
+  daily_hour: 4
+  check_interval_minutes: 60
+  state_path: ""
+  base_url: ""
+  model: ""
+  thinking_mode: ""
+  temperature: 0.1
+  max_tokens: 1800
+  material_limit: 18
+  first_run_material_limit: 160
+  source_excerpt_chars: 900
+  recent_continuity_days: 3
+  persona_events_limit: 24
+  recent_buffer_max: 24
+  staging_pool_max: 24
+  candidate_max: 40
 
 reflection:
   enabled: true
@@ -850,8 +890,7 @@ update_python_runtime() {
   }
 
   if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    printf 'Pull latest code...\n'
-    git pull --ff-only || return 1
+    ombre_update_git_checkout || return 1
   fi
 
   if prompt_yes_no '现在安装/更新 Python 依赖吗' 'y'; then

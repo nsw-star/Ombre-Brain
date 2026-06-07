@@ -13,8 +13,7 @@ echo "Repo: $(pwd)"
 echo "Compose: ${COMPOSE_FILE}"
 
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  echo "Pull latest code..."
-  git pull --ff-only
+  ombre_update_git_checkout
 fi
 
 echo "Update containers..."
