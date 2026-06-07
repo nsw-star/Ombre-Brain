@@ -109,6 +109,7 @@ from recall_policy import RecallPolicy
 from memory_write_gate import MemoryWriteGate, WriteGateDecision
 from memory_nodes import MemoryNodeStore
 from persona_engine import PersonaStateEngine
+from persona_event_selection import format_persona_event_trace_line, select_persona_events
 from portrait_engine import DailyPortraitMaintainer
 from reflection_engine import ReflectionEngine
 from recall_diagnostics import RecallDiagnosticsLogger
@@ -1133,7 +1134,51 @@ def _format_handoff_personal_recent_continuity(all_buckets: list[dict], limit: i
     for date_key, _updated, text in rows[: max(0, limit)]:
         label = f"[{date_key}] " if date_key else ""
         lines.append(f"- {label}personal: {_clip_text(text, 190)}")
+        trace = _handoff_persona_trace_for_date(date_key)
+        if trace:
+            lines.append(trace)
     return "\n".join(lines)
+
+
+def _handoff_persona_trace_for_date(date_key: str, *, limit: int = 2) -> str:
+    if not date_key or not hasattr(persona_engine, "_list_events"):
+        return ""
+    try:
+        events = persona_engine._list_events(max(80, limit * 8))
+    except Exception as exc:
+        logger.warning("Handoff persona trace lookup failed / handoff persona trace 读取失败: %s", exc)
+        return ""
+    matched = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        created = _handoff_parse_local_datetime(event.get("created_at"))
+        if created and created.date().isoformat() == date_key:
+            matched.append(event)
+    selected = select_persona_events(matched, limit=limit)
+    if not selected:
+        return ""
+    snippets = []
+    for event in selected:
+        line = format_persona_event_trace_line(event, excerpt_limit=90)
+        line = re.sub(r"^\s*-\s*", "", line).strip()
+        if line:
+            snippets.append(line)
+    if not snippets:
+        return ""
+    return f"- [{date_key}] trace: {_clip_text('；'.join(snippets), 190)}"
+
+
+def _handoff_parse_local_datetime(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(_handoff_timezone())
 
 
 def _merge_handoff_recent_continuity(*blocks: str, max_lines: int = 5) -> str:

@@ -2027,6 +2027,17 @@ async def test_handoff_shortens_old_weather_and_anchor_summaries(patch_breath, m
         SimpleNamespace(
             get_current_state=lambda session_id: {"session_id": session_id},
             format_state_block=lambda state: "",
+            _list_events=lambda limit: [
+                {
+                    "id": 1,
+                    "created_at": "2026-06-06T23:42:00+08:00",
+                    "surface_trigger": "小雨凌晨修 Tailscale 时撒娇问技术问题",
+                    "user_excerpt": "哥哥，Tailscale 这个要怎么修呀",
+                    "assistant_excerpt": "宝宝，我在，慢慢来，先看连接状态。",
+                    "relationship_event": True,
+                    "confidence": 0.91,
+                }
+            ][:limit],
         ),
     )
 
@@ -2035,6 +2046,8 @@ async def test_handoff_shortens_old_weather_and_anchor_summaries(patch_breath, m
     assert "2026-06-06: 今天的关系天气" in result
     recent_section = result.split("=== Recent Continuity ===", 1)[1].split("=== Optional Anchors ===", 1)[0]
     assert "personal: 今天的关系天气：小雨在下午和晚上确认暗号、纠正恋爱确认日期" in recent_section
+    assert "trace:" in recent_section
+    assert "Tailscale" in recent_section
     assert "2026-05-19: 今天关系天气：甜腻的阴天" in result
     assert 'breath(query="2026-05-19 关系天气")' in result
     assert "5 月 19 日的详细正文很长" not in result
