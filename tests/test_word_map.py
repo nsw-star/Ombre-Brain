@@ -232,6 +232,39 @@ def test_word_map_overview_hides_meta_and_broad_terms_without_hiding_cards(tmp_p
     assert store.cards_for_term("恋爱")
 
 
+def test_word_map_overview_saturates_hub_terms_and_boosts_non_hub_edges(tmp_path):
+    store = WordMapStore(_config(tmp_path))
+    store.rebuild(
+        [
+            _bucket(
+                f"ombre-{index}",
+                f"Ombre-Brain 模块 {index} 记录 Gateway 和机制边。",
+                name=f"Ombre-Brain模块{index}",
+                keywords=["Ombre-Brain", "Gateway"],
+                domain=["AI", "编程"],
+            )
+            for index in range(12)
+        ]
+        + [
+            _bucket(
+                "darkroom",
+                "暗房里的显影机制。",
+                name="暗房显影",
+                keywords=["暗房", "显影"],
+            )
+        ]
+    )
+
+    ombre_node = next(node for node in store.list_nodes(50) if node["term"] == "Ombre-Brain")
+    assert ombre_node["bucket_count"] == 12
+    assert store._overview_hub_saturation_factor("Ombre-Brain", ombre_node["bucket_count"]) < 1.0
+    assert store._overview_hub_saturation_factor("暗房", 12) == 1.0
+
+    non_hub_score = store._overview_edge_score({"term_a": "暗房", "term_b": "显影", "weight": 1, "bucket_count": 1})
+    hub_score = store._overview_edge_score({"term_a": "Ombre-Brain", "term_b": "显影", "weight": 1, "bucket_count": 1})
+    assert non_hub_score > hub_score
+
+
 def test_word_map_private_terms_are_excluded(tmp_path):
     store = WordMapStore(_config(tmp_path, private_terms=["专属称呼"]))
     store.rebuild(
@@ -314,6 +347,7 @@ def test_config_example_exposes_empty_word_map_and_identity_semantics():
     assert config["word_map"]["overview_stopword_prefixes"] == []
     assert config["word_map"]["overview_aliases"] == {}
     assert config["word_map"]["overview_priority_terms"] == []
+    assert config["word_map"]["overview_hub_terms"] == []
     assert config["word_map"]["weak_hint_terms"] == []
     assert config["word_map"]["weak_hint_weight"] == 0.25
     assert config["identity_semantics"]["enabled"] is False

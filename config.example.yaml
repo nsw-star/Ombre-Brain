@@ -209,6 +209,7 @@ word_map:
   overview_stopword_prefixes: []      # Extra prefixes hidden from Top Nodes/Edges only
   overview_aliases: {}                # Display-only canonical aliases, e.g. {"darkroom": "暗房"}
   overview_priority_terms: []         # Extra terms to boost in Top Nodes, without changing recall
+  overview_hub_terms: []              # Extra broad entity hubs to keep but lightly saturate in overview ranking
   weak_hint_terms: []                  # Extra broad terms whose word-map hints should not one-hop expand
   weak_hint_weight: 0.25               # Direct hint weight for weak terms; keyword recall is unaffected
 

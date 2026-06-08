@@ -161,6 +161,11 @@ DEFAULT_OVERVIEW_PRIORITY_TERMS = {
     "第一行代码",
     "记忆不是表演",
 }
+DEFAULT_OVERVIEW_HUB_TERMS = {
+    "ombre-brain",
+    "haven",
+    "小雨",
+}
 DEFAULT_WEAK_HINT_TERMS = {
     "人机恋",
     "恋爱",
@@ -234,6 +239,11 @@ class WordMapStore:
         self.overview_priority_terms = {
             _normalize_term(item)
             for item in itertools.chain(DEFAULT_OVERVIEW_PRIORITY_TERMS, cfg.get("overview_priority_terms", []) or [])
+            if _normalize_term(item)
+        }
+        self.overview_hub_terms = {
+            _normalize_term(item)
+            for item in itertools.chain(DEFAULT_OVERVIEW_HUB_TERMS, cfg.get("overview_hub_terms", []) or [])
             if _normalize_term(item)
         }
         self.weak_hint_terms = {
@@ -818,7 +828,8 @@ class WordMapStore:
             source_bonus = max(source_bonus, 1.25)
         specificity_bonus = self._overview_specificity_bonus(term, sources)
         coverage_factor = 1.0 / (bucket_count ** self._overview_coverage_exponent(term, sources))
-        return round(max_weight * coverage_factor * specificity_bonus * source_bonus, 4)
+        hub_factor = self._overview_hub_saturation_factor(term, bucket_count)
+        return round(max_weight * coverage_factor * hub_factor * specificity_bonus * source_bonus, 4)
 
     def _overview_edge_score(self, item: dict[str, Any]) -> float:
         try:
@@ -830,7 +841,11 @@ class WordMapStore:
             self._overview_specificity_bonus(str(item.get("term_a") or ""), set())
             + self._overview_specificity_bonus(str(item.get("term_b") or ""), set())
         ) / 2.0
-        return round(weight * term_bonus / (bucket_count ** 0.42), 4)
+        diversity_factor = self._overview_edge_diversity_factor(
+            str(item.get("term_a") or ""),
+            str(item.get("term_b") or ""),
+        )
+        return round(weight * term_bonus * diversity_factor / (bucket_count ** 0.42), 4)
 
     @staticmethod
     def _overview_source_bonus(sources: set[str]) -> float:
@@ -923,6 +938,22 @@ class WordMapStore:
         if re.search(r"[_-]", normalized) or re.search(r"[A-Za-z]", term):
             return 0.3
         return 0.42
+
+    def _overview_hub_saturation_factor(self, term: str, bucket_count: int) -> float:
+        if not self._is_overview_hub_term(term) or bucket_count <= 10:
+            return 1.0
+        return max(0.72, (10.0 / max(1, bucket_count)) ** 0.32)
+
+    def _overview_edge_diversity_factor(self, term_a: str, term_b: str) -> float:
+        hub_count = int(self._is_overview_hub_term(term_a)) + int(self._is_overview_hub_term(term_b))
+        if hub_count == 0:
+            return 1.12
+        if hub_count == 2:
+            return 0.72
+        return 1.0
+
+    def _is_overview_hub_term(self, term: str) -> bool:
+        return _normalize_term(term) in self.overview_hub_terms
 
     def _embedded_priority_canonical_term(self, raw_term: str, normalized: str) -> str:
         if not raw_term or not normalized:
