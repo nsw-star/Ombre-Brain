@@ -131,6 +131,7 @@ DEFAULT_WORD_MAP_OVERVIEW_STOPWORDS = {
     "小乖",
     "birthday",
     "fact",
+    "haven_chat_endpoint",
     "naming_day",
     "profile",
     "relationship_anchor",
@@ -654,6 +655,12 @@ class WordMapStore:
     def _is_overview_term_hidden(self, value: Any) -> bool:
         term = _normalize_term(value)
         if not term:
+            return True
+        if "日印象" in term or "relationship_weather" in term:
+            return True
+        if re.fullmatch(r"[a-f0-9]{12,40}", term):
+            return True
+        if re.fullmatch(r"[a-f0-9]{8}-[a-f0-9-]{27,}", term):
             return True
         if term in self.stopwords or term in self.private_terms or term in self.overview_stopwords:
             return True

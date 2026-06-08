@@ -172,6 +172,12 @@ def test_word_map_overview_hides_meta_and_broad_terms_without_hiding_cards(tmp_p
                 keywords=["关系天气", "日印象"],
                 domain=["自省", "恋爱"],
             ),
+            _bucket(
+                "1a57d19ef4f9",
+                "一个未命名桶。",
+                name="1a57d19ef4f9",
+                keywords=["未命名"],
+            ),
         ]
     )
 
@@ -182,6 +188,8 @@ def test_word_map_overview_hides_meta_and_broad_terms_without_hiding_cards(tmp_p
     assert "wish" not in overview_terms
     assert "interaction_pattern" not in overview_terms
     assert "日印象" not in overview_terms
+    assert "1a57d19ef4f9" not in overview_terms
+    assert all("日印象" not in term for term in overview_terms)
     assert "暗房" in overview_terms
     assert "流星" in overview_terms
     assert "记忆不是表演" in {node["term"] for node in overview[:5]}
