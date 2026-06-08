@@ -89,6 +89,7 @@ DEFAULT_WORD_MAP_OVERVIEW_STOPWORDS = {
     "ai",
     "boundary_setting",
     "bucket_original",
+    "bdsm",
     "communication_preference",
     "diary_extract",
     "from_diary",
