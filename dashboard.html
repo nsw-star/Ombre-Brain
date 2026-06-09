@@ -5671,9 +5671,14 @@ async function saveConfig(persist, persistEnv) {
   var candidate = {};
   if (activeTarget === 'config') {
     candidate.dehydration = {
+      model: document.getElementById('cfg-dehy-model').value,
       base_url: document.getElementById('cfg-dehy-url').value,
+      max_tokens: numberValue('cfg-dehy-maxtokens', 4096),
+      temperature: floatValue('cfg-dehy-temp', 0.3),
     };
     candidate.embedding = {
+      enabled: document.getElementById('cfg-emb-enabled').value === 'true',
+      model: document.getElementById('cfg-emb-model').value,
       base_url: document.getElementById('cfg-emb-url').value,
     };
     candidate.persona = {
@@ -5683,7 +5688,18 @@ async function saveConfig(persist, persistEnv) {
       base_url: document.getElementById('cfg-persona-url').value,
     };
     candidate.dream = {
+      enabled: document.getElementById('cfg-dream-engine-enabled').value === 'true',
+      auto_enabled: document.getElementById('cfg-dream-enabled').value === 'true',
+      surface_enabled: document.getElementById('cfg-dream-surface').value === 'true',
+      inject_enabled: document.getElementById('cfg-dream-inject').value === 'true',
+      retain_after_inject: document.getElementById('cfg-dream-retain').value === 'true',
+      model: document.getElementById('cfg-dream-model').value,
       base_url: document.getElementById('cfg-dream-url').value,
+      daily_hour: numberValue('cfg-dream-hour', 3),
+      daily_probability: floatValue('cfg-dream-prob', 0.4),
+      min_material_count: numberValue('cfg-dream-min', 5),
+      material_window_hours: numberValue('cfg-dream-window', 48),
+      identity_anchor_id: document.getElementById('cfg-dream-anchor').value,
     };
     candidate.reflection = {
       enabled: document.getElementById('cfg-reflection-enabled').value === 'true',
@@ -5750,6 +5766,11 @@ async function saveConfig(persist, persistEnv) {
   ].forEach(function(sectionName) {
     if (candidate[sectionName]) addChangedSection(body, sectionName, candidate[sectionName]);
   });
+
+  var mergeVal = numberValue('cfg-merge', 75);
+  if (configSnapshot && mergeVal !== (configSnapshot.merge_threshold ?? 75)) {
+    body.merge_threshold = mergeVal;
+  }
 
   var keyVal = document.getElementById('cfg-dehy-key').value;
   if (keyVal) {
