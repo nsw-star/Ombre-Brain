@@ -809,6 +809,65 @@ async def test_search_skips_feel_hits_without_touching(patch_breath):
 
 
 @pytest.mark.asyncio
+async def test_recall_debug_skips_feel_keyword_seed_and_moment_candidates(patch_breath):
+    import server
+
+    patch_breath(
+        [
+            _bucket(
+                "F",
+                "## moment\n日印象里提到小狗，但它不该作为普通召回 seed。",
+                name="2026-05-27 日印象",
+                bucket_type="feel",
+                score=10.0,
+            ),
+        ],
+        search_ids=["F"],
+        embedding_engine=DummyEmbeddingEngine([]),
+    )
+
+    payload = await server._build_recall_debug_payload("小狗", max_candidates=10, max_results=3)
+
+    assert payload["seed_buckets"] == []
+    assert payload["returned_moment_ids"] == []
+    assert all(item["bucket_id"] != "F" for item in payload["candidates"])
+
+
+@pytest.mark.asyncio
+async def test_word_map_hint_does_not_add_feel_seed(monkeypatch, patch_breath):
+    import server
+
+    patch_breath(
+        [
+            _bucket(
+                "F",
+                "日印象里提到夏天。",
+                name="2026-05-27 日印象",
+                bucket_type="feel",
+                score=10.0,
+            ),
+        ],
+        search_ids=[],
+        embedding_engine=DummyEmbeddingEngine([]),
+    )
+    monkeypatch.setattr(server, "word_map_store", DummyWordMapStore({"bucket_scores": {"F": 0.9}}))
+    monkeypatch.setattr(server, "_word_map_hint_available", lambda: True)
+
+    matches = []
+    seed_diagnostics = {}
+    scores, _debug = server._append_breath_word_map_matches(
+        query="夏天",
+        matches=matches,
+        all_buckets=await server.bucket_mgr.list_all(),
+        seed_diagnostics=seed_diagnostics,
+    )
+
+    assert scores == {}
+    assert matches == []
+    assert seed_diagnostics == {}
+
+
+@pytest.mark.asyncio
 async def test_search_limits_direct_hits_to_max_results(patch_breath):
     import server
 

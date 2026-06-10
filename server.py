@@ -3030,10 +3030,29 @@ def _moments_by_bucket(moments: list[dict]) -> dict[str, list[dict]]:
     return grouped
 
 
+def _is_breath_recall_seed_bucket(bucket: dict | None) -> bool:
+    if not isinstance(bucket, dict):
+        return False
+    meta = bucket.get("metadata", {}) if isinstance(bucket.get("metadata"), dict) else {}
+    return meta.get("type") != "feel"
+
+
+def _breath_recall_seed_buckets(buckets: list[dict]) -> list[dict]:
+    return [bucket for bucket in buckets if _is_breath_recall_seed_bucket(bucket)]
+
+
+def _moment_from_feel_bucket(moment: dict | None) -> bool:
+    if not isinstance(moment, dict):
+        return False
+    meta = moment.get("metadata", {}) if isinstance(moment.get("metadata"), dict) else {}
+    return meta.get("bucket_type") == "feel"
+
+
 def _recallable_moments(moments: list[dict]) -> list[dict]:
     return [
         moment for moment in moments
         if can_moment_be_recall_context(moment)
+        and not _moment_from_feel_bucket(moment)
     ]
 
 
@@ -3382,7 +3401,7 @@ def _get_breath_word_map_hints(
     eligible_ids = {
         str(bucket.get("id") or "")
         for bucket in buckets
-        if isinstance(bucket, dict) and bucket.get("id")
+        if _is_breath_recall_seed_bucket(bucket) and bucket.get("id")
     }
     if not eligible_ids:
         return {}, {}
@@ -3430,7 +3449,7 @@ def _append_breath_word_map_matches(
     matched_ids = {str(bucket.get("id") or "") for bucket in matches if bucket.get("id")}
     for bucket_id, hint_score in word_map_scores.items():
         bucket = bucket_map.get(bucket_id)
-        if not bucket:
+        if not _is_breath_recall_seed_bucket(bucket):
             continue
         hint_debug = word_map_debug.get(bucket_id) or {}
         bucket["word_map_hint"] = True
@@ -4376,6 +4395,7 @@ async def _build_recall_debug_payload(
         )
     except Exception as e:
         return {"status": "error", "error": "search_failed", "message": str(e)}
+    matches = _breath_recall_seed_buckets(matches)
 
     seed_diagnostics: dict[str, dict] = {}
     for bucket in matches:
@@ -5406,6 +5426,7 @@ async def breath(
     except Exception as e:
         logger.error(f"Search failed / 检索失败: {e}")
         return "检索过程出错，请稍后重试。"
+    matches = _breath_recall_seed_buckets(matches)
 
     seed_diagnostics: dict[str, dict] = {}
     for bucket in matches:
