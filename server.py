@@ -3973,6 +3973,28 @@ def _is_source_record_synthetic_moment(moment: dict | None) -> bool:
     return bool(meta.get("source_record_direct") or (moment or {}).get("_source_record_synthetic"))
 
 
+def _breath_moment_runtime_gate_payload(
+    moment: dict,
+    *,
+    explicit_lookup: bool = False,
+) -> dict:
+    gate = moment_runtime_gate_debug(moment, explicit_lookup=explicit_lookup)
+    if _is_source_record_synthetic_moment(moment):
+        meta = moment.get("metadata", {}) if isinstance(moment.get("metadata"), dict) else {}
+        reason = str(meta.get("source_record_direct_reason") or "source_record_direct")
+        gate["source_record_direct_override"] = True
+        gate["topic_evidence"] = {
+            "required": bool(meta.get("source_record_fragment_seed")),
+            "present": True if meta.get("source_record_fragment_seed") else None,
+        }
+        gate["direct_injection"] = {
+            "allowed": True,
+            "reason": reason,
+        }
+        gate["would_inject_direct"] = True
+    return gate
+
+
 def _direct_moments_for_bucket(bucket: dict, query: str = "") -> list[dict]:
     explicit_lookup = _query_explicitly_requests_archive_memory(query)
     return [
@@ -5077,7 +5099,10 @@ async def _build_recall_debug_payload(
                     direct_render_mode=direct_render_mode,
                 ) if bucket else {},
                 "layer_debug": moment_layer_debug(final or moment, explicit_lookup=explicit_lookup),
-                "runtime_gate": moment_runtime_gate_debug(final or moment, explicit_lookup=explicit_lookup),
+                "runtime_gate": _breath_moment_runtime_gate_payload(
+                    final or moment,
+                    explicit_lookup=explicit_lookup,
+                ),
                 "annotation_summary": (moment.get("metadata") or {}).get("annotation_summary"),
                 "annotation_facets": (moment.get("metadata") or {}).get("annotation_facets", {}),
                 "evidence_spans": (moment.get("metadata") or {}).get("evidence_spans", []),
