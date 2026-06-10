@@ -245,6 +245,17 @@ ASSOCIATIVE_PROMPT_VAGUE_FOCUS = {
     "什么",
 }
 
+ASSOCIATIVE_PROMPT_EMPTY_QUERY = {
+    "会想到什么",
+    "你会想到什么",
+    "想到什么",
+    "会想起什么",
+    "你会想起什么",
+    "想起什么",
+    "联想到什么",
+    "你会联想到什么",
+}
+
 
 @dataclass(frozen=True)
 class MemoryRelevanceOptions:
@@ -422,6 +433,9 @@ def recall_focus_query(query: str) -> str:
     """Return the concrete anchor inside prompts like: 如果我说“X”，你会想到什么."""
     text = str(query or "").strip()
     if not text:
+        return ""
+    compact = re.sub(r"[\s，。！？、,.!?:：;；~～（）()\[\]【】「」『』“”\"'`]+", "", text)
+    if compact in ASSOCIATIVE_PROMPT_EMPTY_QUERY:
         return ""
     if not any(marker in text for marker in ASSOCIATIVE_PROMPT_MARKERS):
         return text

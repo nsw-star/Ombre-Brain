@@ -82,6 +82,7 @@ def test_auto_vague_query_without_topic_is_suppressed():
     assert policy.is_auto_query_too_vague("qwq")
     assert policy.is_auto_query_too_vague("哈哈")
     assert policy.is_auto_query_too_vague("老公～")
+    assert policy.is_auto_query_too_vague("你会想到什么")
     assert policy.is_auto_query_too_vague("试一下handoff😽")
     assert not policy.is_auto_query_too_vague("好吃030")
     assert not policy.is_auto_query_too_vague("最近少女暴君")

@@ -175,6 +175,7 @@ AUTO_VAGUE_RECALL_MARKERS = frozenset(
         "上下文",
         "想起来",
         "想起",
+        "想到",
         "想到了",
         "记忆",
         "回忆",

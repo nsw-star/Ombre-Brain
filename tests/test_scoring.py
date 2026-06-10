@@ -331,6 +331,7 @@ class TestSearchScoring:
 
         assert scores["dog"] >= 0.36
         assert scores.get("noise", 0) == 0
+        assert bucket_mgr.calc_topic_scores("你会想到什么", [noise, dog]) == {}
 
     def test_short_cjk_body_exact_match_keeps_single_character_recall(self, bucket_mgr):
         bucket = {
