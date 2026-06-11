@@ -344,13 +344,13 @@ choose_feature_scope() {
   local choice
   line
   printf '选择功能范围\n'
-  printf '1. 只用 Ombre MCP 部分（MCP 工具 + Dashboard，不启动 Gateway）\n'
+  printf '1. 只用 Ombre MCP 部分（MCP 工具 + Dashboard + 画像/Darkroom，不启动 Gateway）\n'
   printf '2. 部署全部（MCP + Dashboard + Gateway 自动注入）\n'
   read -r -p '输入（1-2）：' choice
   case "${choice}" in
     1)
       FEATURE_SCOPE="mcp"
-      FEATURE_LABEL="只用 Ombre MCP 部分"
+      FEATURE_LABEL="只用 Ombre MCP 部分（不启动 Gateway）"
       ;;
     *)
       FEATURE_SCOPE="full"
@@ -420,6 +420,9 @@ identity:
     - "亲爱的"
     - "她"
 
+self_anchor:
+  entry_bucket_id: ""
+
 dehydration:
   model: $(yaml_quote "${dehy_model}")
   base_url: $(yaml_quote "${dehy_base_url}")
@@ -469,6 +472,13 @@ word_map:
   stopwords: []
   private_terms: []
   stopword_prefixes: []
+  overview_stopwords: []
+  overview_stopword_prefixes: []
+  overview_aliases: {}
+  overview_priority_terms: []
+  overview_hub_terms: []
+  weak_hint_terms: []
+  weak_hint_weight: 0.25
 
 identity_semantics:
   enabled: false
@@ -514,7 +524,7 @@ gateway:
   portrait_memory_enabled: true
   portrait_memory_budget: 360
   portrait_memory_max_sources: 8
-  portrait_memory_include_anchors: true
+  portrait_memory_include_anchors: false
   query_planner_enabled: true
   query_planner_model: ""
   query_planner_min_chars: 16
@@ -588,7 +598,8 @@ portrait:
   model: ""
   thinking_mode: ""
   temperature: 0.1
-  max_tokens: 1800
+  max_tokens: 3200
+  json_response_format: true
   material_limit: 18
   first_run_material_limit: 160
   source_excerpt_chars: 900
@@ -825,7 +836,14 @@ print_client_guide() {
   fi
   printf '会话头: 如果客户端支持自定义 header，可加 X-Ombre-Session-Id: main\n'
   printf '\n新版使用提示：新窗口用 breath(mode="handoff")；具体事件用 breath(query="关键词或原句")。\n'
-  printf '刚刚/上一句看 Gateway 的 Just Now Chat Context；暗房外部只暴露 darkroom_enter。\n'
+  if [[ "${FEATURE_SCOPE}" == "full" ]]; then
+    printf '刚刚/上一句优先看 Gateway 的 Just Now Chat Context，不要默认查长期记忆。\n'
+  else
+    printf '仅 MCP 不提供 Gateway Just Now 注入；刚刚/上一句优先看客户端当前对话上下文，不要默认 breath(query="刚刚...")。\n'
+  fi
+  printf '自我锚点用 breath(domain="self_anchor")，分段查用 breath(domain="self_anchor", query="关键词")。\n'
+  printf '画像在 Dashboard 的 Persona/画像面板手动生成/刷新；profile_fact 需要证据 bucket/moment 后再确认。\n'
+  printf '暗房外部只暴露 darkroom_enter(note=..., visibility="active")，不会回显正文。\n'
   printf '完整工具说明见 docs/Tool Guide.md；Dashboard 桶列表可批量选择并删除普通记忆桶。\n'
 
   case "${DEPLOY_TARGET}" in
@@ -881,15 +899,34 @@ Current mainline usage notes:
   Specific old event, preference, boundary, project, or remembered phrase:
     breath(query="keywords or original phrase")
 
-  Just now / previous message / recently said password:
-    Prefer Gateway Just Now Chat Context. Do not default to breath(query="just now").
+  Self anchor:
+    breath(domain="self_anchor")
+    breath(domain="self_anchor", query="keyword")
+    Do not use bare breath(query="self_anchor").
 
-  Profile facts:
+  Just now / previous message / recently said password:
+EOF
+  if [[ "${FEATURE_SCOPE}" == "full" ]]; then
+    cat >> connection_guide.txt <<EOF
+    Prefer Gateway Just Now Chat Context. Do not default to breath(query="just now").
+EOF
+  else
+    cat >> connection_guide.txt <<EOF
+    MCP-only deployments do not inject Gateway Just Now Chat Context.
+    Prefer the current client conversation context. Do not default to breath(query="just now").
+EOF
+  fi
+  cat >> connection_guide.txt <<EOF
+
+  Portrait and Profile facts:
+    Use Dashboard -> Persona/Portrait panel to generate or refresh portrait_state.json.
+    Portrait state may hold profile_fact_candidates; it does not write profile_fact automatically.
     Use profile_fact(...) only with evidence bucket or evidence moment.
-    Daily Portrait Maintainer writes state/portrait_state.json; it does not write profile_fact automatically.
+    Gateway portrait memory reads profile_fact by default and does not include ordinary anchors unless explicitly enabled.
 
   Darkroom:
-    External client tool lists should expose only darkroom_enter(note=...).
+    External client tool lists should expose only darkroom_enter(note=..., visibility="active").
+    visibility can be active / archived / retracted.
     It does not echo note bodies; handoff shows only Darkroom Door status.
 
   Dream Context:
