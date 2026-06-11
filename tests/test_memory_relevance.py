@@ -9,6 +9,7 @@ from memory_relevance import (
     query_has_explicit_entity_marker,
     recall_focus_query,
     recall_search_query,
+    recall_topic_query,
     relevance_decision,
 )
 
@@ -214,6 +215,22 @@ def test_query_terms_filter_jieba_filler_words():
     assert "工具" in memory_terms
     assert "跑通" in memory_terms
     assert "那次" not in memory_terms
+
+
+def test_query_topic_terms_strip_shell_words_and_keep_single_cjk_topic():
+    for query in [
+        "猫",
+        "关于猫",
+        "关于猫的",
+        "我的猫",
+        "我家的猫",
+        "嗯…我没发图片啊，突然想起我家的猫",
+    ]:
+        assert recall_topic_query(query) == "猫"
+        assert content_terms_for_query(query) == ["猫"]
+
+    assert recall_topic_query("那狗呢") == "狗"
+    assert content_terms_for_query("那狗呢") == ["狗"]
 
 
 def test_compound_recall_terms_keep_individual_anchors():

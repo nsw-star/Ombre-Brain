@@ -307,6 +307,31 @@ class TestSearchScoring:
         assert bucket_mgr._calc_topic_score("小雨", bucket) == 0
         assert bucket_mgr._calc_topic_score("Haven", bucket) == 0
 
+    def test_topic_score_strips_query_shell_before_short_cjk_scoring(self, bucket_mgr):
+        cat_bucket = {
+            "id": "cat",
+            "content": "取快递的时候遇到了一只流浪猫。",
+            "metadata": {
+                "name": "流浪猫与自制弓",
+                "domain": ["生活"],
+                "tags": [],
+            },
+        }
+        about_bucket = {
+            "id": "about",
+            "content": "这是一段关于互动模式和对话风格的讨论。",
+            "metadata": {
+                "name": "AI拟人化讨论与情感互动",
+                "domain": ["互动"],
+                "tags": [],
+            },
+        }
+
+        scores = bucket_mgr.calc_topic_scores("关于猫", [cat_bucket, about_bucket])
+
+        assert scores["cat"] > 0
+        assert scores.get("about", 0) == 0
+
     def test_qq_reaction_forms_do_not_create_topic_scores(self, bucket_mgr):
         bucket = {
             "id": "mail",

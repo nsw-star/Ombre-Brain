@@ -4702,9 +4702,9 @@ def _breath_lexical_match_terms(query: str, all_buckets: list[dict] | None = Non
                 collapsed = collapsed[len(prefix):]
                 break
         key = collapsed.lower()
-        if len(key) < 2 or key in BREATH_LEXICAL_GENERIC_TERMS:
+        if not key or key in BREATH_LEXICAL_GENERIC_TERMS:
             continue
-        if re.fullmatch(r"[\u4e00-\u9fff]+", collapsed) and len(collapsed) < 2:
+        if re.fullmatch(r"[a-z0-9_.:-]+", key) and len(key) < 3 and not re.search(r"\d", key):
             continue
         terms.append(collapsed)
     output = []

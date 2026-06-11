@@ -204,10 +204,30 @@ DEFAULT_CONTEXT_TERMS = (
 
 QUERY_TERM_STOPWORDS = frozenset(
     {
+        "关于",
+        "有关",
+        "相关",
+        "如果",
+        "假如",
+        "要是",
+        "期望",
+        "希望",
+        "想要",
         "知道",
         "记得",
+        "想到",
         "想起",
         "想起来",
+        "联想",
+        "联想到",
+        "说",
+        "提到",
+        "问到",
+        "讲到",
+        "被",
+        "得",
+        "突然",
+        "忽然",
         "今天",
         "昨天",
         "明天",
@@ -219,6 +239,8 @@ QUERY_TERM_STOPWORDS = frozenset(
         "那次",
         "这个",
         "那个",
+        "这",
+        "那",
         "这条",
         "那条",
         "事情",
@@ -234,6 +256,7 @@ QUERY_TERM_STOPWORDS = frozenset(
         "吧",
         "的",
         "了",
+        "是",
         "会",
         "能",
         "可以",
@@ -242,6 +265,44 @@ QUERY_TERM_STOPWORDS = frozenset(
         "一下",
         "再来",
         "一次",
+        "我",
+        "你",
+        "他",
+        "她",
+        "它",
+        "自己",
+        "自己的",
+        "我家",
+        "咱家",
+        "有",
+        "只",
+        "个",
+        "没",
+        "没发图片",
+        "发图片",
+        "图片",
+        "照片",
+        "和",
+        "与",
+        "及",
+        "跟",
+        "同",
+        "自动",
+        "浮现",
+        "注入",
+        "召回",
+        "命中",
+        "查到",
+        "找到",
+        "检测",
+        "意见",
+        "嗯",
+        "呃",
+        "唉",
+        "诶",
+        "欸",
+        "哦",
+        "噢",
     }
 )
 
@@ -614,13 +675,23 @@ def content_terms_for_query(
     options: MemoryRelevanceOptions | None = None,
 ) -> list[str]:
     options = options or memory_relevance_options_from_config()
-    terms = _query_terms(recall_focus_query(query, options))
+    focus = recall_focus_query(query, options)
+    topic = recall_topic_query(query, options)
+    terms: list[str] = []
+    if topic:
+        terms.extend(_query_terms(topic, allow_single_cjk=True))
+    if focus and focus != topic:
+        for term in _query_terms(focus):
+            stripped = _strip_query_water_terms(term, options, include_context=False)
+            if stripped != re.sub(r"[^0-9a-z\u4e00-\u9fff_.:-]+", "", _normalize_alias(term)):
+                continue
+            terms.append(term)
     content_terms = [
         term
         for term in terms
         if not _is_context_term(term, options.context_terms)
     ]
-    return content_terms or terms
+    return _unique(content_terms or terms)
 
 
 def emotional_recall_plan(
@@ -752,6 +823,23 @@ def recall_focus_query(
         if focus:
             return focus
     return text
+
+
+def recall_topic_query(
+    query: str,
+    options: MemoryRelevanceOptions | None = None,
+) -> str:
+    """Return query text with recall shell/filler words removed."""
+    options = options or memory_relevance_options_from_config()
+    text = str(query or "").strip()
+    if not text:
+        return ""
+    focus = recall_focus_query(text, options)
+    focus_topic = _strip_query_water_terms(focus, options)
+    raw_topic = _strip_query_water_terms(text, options)
+    if focus != text and focus_topic and raw_topic and len(raw_topic) < len(focus_topic):
+        return raw_topic
+    return focus_topic or raw_topic or focus
 
 
 def recall_search_query(
@@ -1357,6 +1445,16 @@ def _emotional_event_terms(
             continue
         if has_lookup_shell and key == compact_query and len(key) > 12:
             continue
+        emotion_residue = key
+        for emotion in sorted(EMOTIONAL_RECALL_TERMS, key=len, reverse=True):
+            emotion_residue = emotion_residue.replace(_compact_emotional_text(emotion), "")
+        for state in sorted(EMOTIONAL_RECALL_STATE_TERMS, key=len, reverse=True):
+            emotion_residue = emotion_residue.replace(_compact_emotional_text(state), "")
+        if not emotion_residue:
+            continue
+        if emotion_residue != key:
+            cleaned = emotion_residue
+            key = emotion_residue
         if any(emotion in key for emotion in EMOTIONAL_RECALL_TERMS) and len(key) > 12:
             continue
         if key not in {_compact_emotional_text(item) for item in output}:
@@ -1366,7 +1464,7 @@ def _emotional_event_terms(
     return output
 
 
-def _query_terms(query: str) -> list[str]:
+def _query_terms(query: str, *, allow_single_cjk: bool = False) -> list[str]:
     raw = str(query or "").strip()
     raw_terms = [part for part in re.split(r"[\s,，。！？!?;；:：/\\|]+", raw) if part]
     raw_terms.extend(jieba.lcut(raw, cut_all=False))
@@ -1383,9 +1481,11 @@ def _query_terms(query: str) -> list[str]:
         compact = re.sub(r"[^0-9a-z\u4e00-\u9fff_.:-]+", "", normalized)
         if not compact or compact in QUERY_TERM_STOPWORDS:
             continue
+        if not re.search(r"[0-9a-z\u4e00-\u9fff]", compact):
+            continue
         if re.fullmatch(r"[a-z0-9_\-]+", normalized) and len(normalized) < 3:
             continue
-        if re.fullmatch(r"[\u4e00-\u9fff]+", normalized) and len(normalized) < 2:
+        if re.fullmatch(r"[\u4e00-\u9fff]+", normalized) and len(normalized) < 2 and not allow_single_cjk:
             continue
         seen.add(normalized)
         kept.append(term)
@@ -1404,10 +1504,80 @@ def _query_term_variants(value: str) -> list[str]:
     )
     stripped = re.sub(r"^(?:的是|是|到)", "", stripped).strip()
     for part in re.split(r"(?:以及|还有|或者|和|与|及|跟|同|、|\+)+", stripped):
-        part = part.strip()
+        part = re.sub(
+            r"^[\s，。！？、,.!?:：;；~～♡❤♥（）()\[\]【】「」『』“”\"'`-]+|[\s，。！？、,.!?:：;；~～♡❤♥（）()\[\]【】「」『』“”\"'`-]+$",
+            "",
+            part.strip(),
+        )
         if part:
             variants.append(part)
     return variants
+
+
+def _strip_query_water_terms(
+    query: str,
+    options: MemoryRelevanceOptions | None = None,
+    *,
+    include_context: bool = True,
+) -> str:
+    text = str(query or "").strip()
+    if not text:
+        return ""
+    options = options or memory_relevance_options_from_config()
+    stop_terms = set(QUERY_TERM_STOPWORDS)
+    if include_context:
+        stop_terms.update(str(term or "").strip().lower() for term in options.context_terms or ())
+    tokens: list[str] = []
+    removed_water = False
+    for part in jieba.lcut(text, cut_all=False):
+        for token in re.findall(r"[A-Za-z]+[A-Za-z0-9_.:-]*|\d+(?:\.\d+)+|[\u4e00-\u9fff]+", str(part or "")):
+            raw_token = str(token or "").strip()
+            normalized = _normalize_alias(raw_token)
+            if not normalized:
+                continue
+            compact_key = re.sub(r"[^0-9a-z\u4e00-\u9fff_.:-]+", "", normalized)
+            compact_value = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff_.:-]+", "", raw_token)
+            if not compact_key:
+                continue
+            if compact_key in stop_terms:
+                removed_water = True
+                continue
+            if re.fullmatch(r"[\u4e00-\u9fff]+", compact_key):
+                stripped = _strip_cjk_water_fragments(compact_key, stop_terms)
+                if stripped != compact_key:
+                    removed_water = True
+                compact_key = stripped
+                compact_value = stripped
+                if not compact_key or compact_key in stop_terms:
+                    continue
+            if re.fullmatch(r"[a-z0-9_.:-]+", compact_key):
+                if re.fullmatch(r"[\d.:-]+", compact_key):
+                    continue
+            tokens.append(compact_value or compact_key)
+    if not removed_water:
+        return text
+    if not tokens:
+        return ""
+    if all(re.fullmatch(r"[\u4e00-\u9fff]+", token) for token in tokens):
+        return "".join(tokens)
+    return " ".join(tokens)
+
+
+def _strip_cjk_water_fragments(text: str, stop_terms: set[str]) -> str:
+    cleaned = str(text or "")
+    if not cleaned:
+        return ""
+    cjk_stop_terms = [
+        term
+        for term in stop_terms
+        if term and re.fullmatch(r"[\u4e00-\u9fff]+", term)
+    ]
+    for term in sorted(cjk_stop_terms, key=len, reverse=True):
+        if term and term != cleaned:
+            cleaned = cleaned.replace(term, "")
+            if not cleaned:
+                return ""
+    return cleaned
 
 
 def _list_text(value: Any) -> list[str]:

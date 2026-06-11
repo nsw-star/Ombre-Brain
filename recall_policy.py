@@ -15,6 +15,7 @@ from memory_relevance import (
     query_has_explicit_entity_marker,
     query_has_technical_recall_marker,
     recall_admission_decision,
+    recall_topic_query,
 )
 from identity import identity_names
 
@@ -1055,6 +1056,12 @@ class RecallPolicy:
     def specific_query_terms(self, query: str) -> list[str]:
         raw = str(query or "")
         terms = list(content_terms_for_query(raw, self.options))
+        topic_key = recall_topic_query(raw, self.options)
+        allow_single_cjk_terms = {
+            str(term or "").strip()
+            for term in content_terms_for_query(topic_key, self.options)
+            if re.fullmatch(r"[\u4e00-\u9fff]", str(term or "").strip())
+        }
         terms.extend(re.findall(r"\d+(?:\.\d+)+", raw))
         terms.extend(re.findall(r"[A-Za-z]+[A-Za-z0-9_.:-]*\d[A-Za-z0-9_.:-]*", raw))
         kept = []
@@ -1072,7 +1079,11 @@ class RecallPolicy:
                 continue
             if re.fullmatch(r"[a-z0-9_.:-]+", key) and len(key) < 3 and not re.fullmatch(r"\d+(?:\.\d+)+", key):
                 continue
-            if re.fullmatch(r"[\u4e00-\u9fff]+", cleaned) and len(cleaned) < 2:
+            if (
+                re.fullmatch(r"[\u4e00-\u9fff]+", cleaned)
+                and len(cleaned) < 2
+                and cleaned not in allow_single_cjk_terms
+            ):
                 continue
             if any(_term_subsumes(existing.lower(), key) for existing in kept):
                 continue
