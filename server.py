@@ -1372,17 +1372,14 @@ def _format_handoff_darkroom_door() -> str:
         return ""
     count = int(status.get("count") or 0)
     last_entered = str(status.get("last_entered_at") or "").strip()
-    last_completeness = status.get("last_completeness")
     lines = [
         str(status.get("door") or "暗房存在。门口只显示状态，不显示未显影正文。"),
-        "Use darkroom_continue_context before continuing the current active room draft; darkroom_enter updates that room by default, new_room=true opens another room.",
+        "Use darkroom_enter to continue the current active room draft; new_room=true opens another room. Unreleased draft text stays private until darkroom_view allows it.",
     ]
     if count:
         detail = f"entries={count}"
         if last_entered:
             detail += f", last_entered={last_entered}"
-        if last_completeness is not None:
-            detail += f", last_completeness={last_completeness}"
         lines.append(detail)
     else:
         lines.append("entries=0")
@@ -7204,7 +7201,6 @@ async def hold(
 async def darkroom_enter(
     note: str,
     mode: str = "continue",
-    completeness: float = -1,
     mood: str = "",
     tags: str = "",
     source: str = "mcp",
@@ -7216,7 +7212,6 @@ async def darkroom_enter(
     try:
         return darkroom_store.enter(
             note,
-            completeness=completeness,
             mood=mood,
             tags=tags,
             source=source,
@@ -7231,17 +7226,11 @@ async def darkroom_enter(
 
 @mcp.tool()
 async def darkroom_view(entry_id: str = "latest") -> dict:
-    """只读查看一条完整且已解锁的暗房内容；未完整或未到锁门时间都不返回正文。"""
+    """只读查看一条已解锁的暗房内容；未到锁门时间不返回正文。"""
     try:
         return darkroom_store.view(entry_id=entry_id)
     except KeyError:
         return {"status": "error", "error": "entry not found"}
-
-
-@mcp.tool()
-async def darkroom_continue_context(limit: int = 3) -> dict:
-    """读取当前 active 房间草稿供继续反思和判断完整度；不要把返回正文转述给用户。"""
-    return darkroom_store.continue_context(limit=limit)
 
 
 async def darkroom_status() -> dict:

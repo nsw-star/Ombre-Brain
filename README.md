@@ -27,7 +27,7 @@
 - Daily Portrait Maintainer 会维护用户画像、Haven persona、关系画像和“最近在做什么”，只写 `state/portrait_state.json`，不直接写长期记忆；Dashboard 可手动生成/刷新。
 - 图结构召回的当前主路是 `retrieval_mode=graph`：先找可靠 direct seed，再沿 moment / bucket 边做短摘要联想；`retrieval_mode=bucket` 只是对照模式。
 - 旧桶格式已经按新版边界迁移过：事实/事件进 `### moment`，Haven 的理解进 `### reflection`，`### affect_anchor` 只留和弦、温度和诗性标记。旧 `### assistant_reflection` heading 仍兼容读取，但新写入统一用 `### reflection`。
-- Darkroom 用来放未想透、不该给用户看、不该进普通记忆的内在反思；默认读写同一个 active 房间草稿，`new_room=true` 才新开房间；给用户查看的 `darkroom_view` 必须等完整度到 1 且锁门到期。
+- Darkroom 用来放未想透、不该给用户看、不该进普通记忆的内在反思；默认读写同一个 active 房间草稿，`new_room=true` 才新开房间；给用户查看的 `darkroom_view` 必须等锁门到期。
 - Dream surfacing 和 Gateway Dream Context 是两层开关：`surface_enabled` 控制 `breath()` 梦境浮现，`inject_enabled` 控制 Gateway 隐藏注入，默认不注入。
 - 外部 MCP 工具清单已收窄：日常只保留使用者该调用的工具，`enrich_backfill`、`edge_backfill`、`inspect_diffusion`、`inspect_moments` 等调试/维修入口不放进日常外部工具清单。
 - embedding 推荐用 `OMBRE_EMBEDDING_*` 环境变量。不要把 `embedding.api_key_env` 当成推荐写法；`api_key_env` 是 `gateway.upstreams[*]` 引用上游模型 key 的字段。
@@ -41,7 +41,7 @@
 | Markdown bucket | 每条记忆是 Obsidian 友好的 Markdown + YAML frontmatter |
 | Russell 情绪坐标 | `valence / arousal` 情绪打标 |
 | 遗忘曲线与归档 | inactive 记忆会衰减、归档，feel 不参与普通浮现 |
-| MCP 工具 | 原版已有 `breath / hold / grow / trace / pulse` 和旧 `dream` 自省入口；本 fork 对外推荐 `introspection` 替代旧 `dream`，并新增 `read_bucket / comment_bucket / darkroom_enter / darkroom_continue_context / darkroom_view / profile_fact` 等日常工具 |
+| MCP 工具 | 原版已有 `breath / hold / grow / trace / pulse` 和旧 `dream` 自省入口；本 fork 对外推荐 `introspection` 替代旧 `dream`，并新增 `read_bucket / comment_bucket / darkroom_enter / darkroom_view / profile_fact` 等日常工具 |
 | Dashboard | 原版已有桶列表、详情页、记忆网络、导入面板 |
 | 双通道检索 | fuzzy 关键词 + embedding 语义检索 |
 | 脱水与打标 | LLM 生成压缩正文、domain/tags/情绪等元数据 |
@@ -67,7 +67,7 @@
 | 长期锚点 Anchor | 介于普通浮现和 pinned/permanent 之间的长期记忆位。`anchor=true` 的普通 bucket 不混入普通权重池，`breath()` 会用独立槽位少量带出，适合经过时间验证、未来仍需要被想起的关系锚点或项目锚点 | `server.py`、`dashboard.html` |
 | Relationship Weather | 日印象保存为 `type=feel`，默认不单独注入，可在面板观察或按配置开启注入 | `reflection_engine.py` |
 | Night Dream / Dream Context | 后台夜里用小模型生成潜伏梦；`breath()` 可共振浮现一次，Gateway 也可在 `dream.inject_enabled=true` 时注入一条 Dream Context | `dream_engine.py`、`gateway.py`、`server.py`、`dashboard.html` |
-| Darkroom | 保存未想透、不该给用户看、不该进普通记忆的内在反思；默认更新同一个 active 房间草稿，`new_room=true` 才新开房间；`darkroom_continue_context` 给 AI 续写，`darkroom_view` 只有完整且已解锁时才返回正文 | `darkroom.py`、`server.py`、`dashboard.html` |
+| Darkroom | 保存未想透、不该给用户看、不该进普通记忆的内在反思；默认更新同一个 active 房间草稿，`new_room=true` 才新开房间；`darkroom_view` 只有已解锁时才返回正文 | `darkroom.py`、`server.py`、`dashboard.html` |
 | 年轮 comments | 将再次阅读某条记忆时的感受挂到源 bucket 的 `metadata.comments` 下；旧 feel 可迁移成源记忆年轮 | `bucket_manager.py`、`server.py`、`dashboard.html` |
 | whisper | 无源碎碎念/悄悄话独立保存为 `type=feel + whisper` 标签，可用 `breath(domain="whisper")` 单独读取 | `server.py` |
 | Dashboard 编辑 | 支持正文编辑、事件日期编辑、前端用户年轮写入/删除、桶列表多选删除、日印象月历、Persona 面板、网络图、手动 reflect；日印象页按日期显示完整日印象，不再做情绪天气图 | `dashboard.html`、`server.py` |
@@ -777,8 +777,7 @@ rm /srv/ombre-brain/state/.dashboard_auth.json
 | `comment_bucket` | 给已有记忆追加年轮/评论；适合“读到旧记忆后的新感受或补充”。 |
 | `hold` | 写单条长期记忆；可传 `date` 记录事件日期；显式 `domain` 会覆盖自动领域；显式 `valence/arousal` 会覆盖自动情绪；`whisper=True` 写无源悄悄话。 |
 | `darkroom_enter` | 写入私密暗房；note 默认第一人称，不用第三人称称呼自己；默认更新当前 active 房间草稿，可传 `new_room=true` 新开房间，可传 `lock_for="6h"` / `"3d"`；只返回门口状态，不回显正文。 |
-| `darkroom_continue_context` | 读取当前 active 房间草稿供 AI 继续反思和判断完整度；不要转述给用户。 |
-| `darkroom_view` | 只读查看完整且已解锁的暗房内容；可按 room_id 返回该房间全部 revisions；未完整返回 `not_ready`，未到锁门时间只返回 `unlock_at`，不返回正文。 |
+| `darkroom_view` | 只读查看已解锁的暗房内容；可按 room_id 返回该房间全部 revisions 和每次写入时间；未到锁门时间只返回 `unlock_at`，不返回正文。 |
 | `grow` | 长内容摘记；只喂已经筛过的长期记忆点，不要整篇流水账原样写入。 |
 | `profile_fact` | 手动固化带证据的用户画像事实；需要 evidence bucket/moment。 |
 | `trace` | 修改、归档、删除或沉底旧记忆前使用；先 `read_bucket` 再操作；可用 `date` 单独修正事件日期。 |

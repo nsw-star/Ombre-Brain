@@ -38,18 +38,6 @@ def _parse_lock_for(value: str | None) -> timedelta | None:
     return timedelta(days=amount)
 
 
-def _clamp_completeness(value: float | int | str | None) -> float | None:
-    if value is None or value == "":
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if number < 0:
-        return None
-    return max(0.0, min(1.0, number))
-
-
 def _split_tags(tags: str | list[str] | tuple[str, ...] | None) -> list[str]:
     if tags is None:
         return []
@@ -110,7 +98,6 @@ class DarkroomStore:
         self,
         note: str,
         *,
-        completeness: float | int | str | None = None,
         mood: str = "",
         tags: str | list[str] | tuple[str, ...] | None = None,
         source: str = "mcp",
@@ -132,7 +119,6 @@ class DarkroomStore:
         with self._lock:
             self.base_dir.mkdir(parents=True, exist_ok=True)
             previous = None if _bool_value(new_room) else self._last_room_unlocked(visibility="active")
-            previous_completeness = previous.get("completeness") if previous else None
             state = self._status_unlocked()
             continuation_anchor = {} if _bool_value(new_room) else self._continuation_anchor_unlocked(mode_key)
             room_id = self._entry_room_id(previous) if previous else self._new_room_id()
@@ -143,9 +129,7 @@ class DarkroomStore:
                 "created_at": now.isoformat(timespec="seconds"),
                 "note": text,
                 "mode": mode_key,
-                "completeness": _clamp_completeness(completeness),
                 "previous_entry_id": previous.get("id") if previous else "",
-                "previous_completeness": previous_completeness,
                 "continuation_anchor": continuation_anchor,
                 "mood": str(mood or "").strip()[:80],
                 "tags": _split_tags(tags),
@@ -170,9 +154,6 @@ class DarkroomStore:
             entry = self._find_entry_unlocked(entry_id)
             if not entry:
                 raise KeyError("entry not found")
-            not_ready = self._not_ready_payload_unlocked(entry)
-            if not_ready:
-                return not_ready
             locked = self._locked_payload_unlocked(entry)
             if locked:
                 return locked
@@ -194,7 +175,6 @@ class DarkroomStore:
                 "room_id": self._entry_room_id(entry),
                 "revision": entry.get("revision", 1),
                 "created_at": entry.get("created_at", ""),
-                "completeness": entry.get("completeness"),
                 "mood": entry.get("mood", ""),
                 "tags": entry.get("tags", []),
                 "content": entry.get("note", ""),
@@ -205,9 +185,6 @@ class DarkroomStore:
             entry = self._find_entry_unlocked(entry_id)
             if not entry:
                 raise KeyError("entry not found")
-            not_ready = self._not_ready_payload_unlocked(entry)
-            if not_ready:
-                return not_ready
             locked = self._locked_payload_unlocked(entry)
             if locked:
                 return locked
@@ -218,7 +195,7 @@ class DarkroomStore:
                 "room_id": self._entry_room_id(entry),
                 "revision": entry.get("revision", 1),
                 "created_at": entry.get("created_at", ""),
-                "completeness": entry.get("completeness"),
+                "written_at": entry.get("created_at", ""),
                 "mood": entry.get("mood", ""),
                 "tags": entry.get("tags", []),
                 "visibility": entry.get("visibility", "active"),
@@ -230,7 +207,7 @@ class DarkroomStore:
                         "room_id": self._entry_room_id(item),
                         "revision": item.get("revision", 1),
                         "created_at": item.get("created_at", ""),
-                        "completeness": item.get("completeness"),
+                        "written_at": item.get("created_at", ""),
                         "mood": item.get("mood", ""),
                         "tags": item.get("tags", []),
                         "visibility": item.get("visibility", "active"),
@@ -255,7 +232,6 @@ class DarkroomStore:
                         "revision": entry.get("revision", 1),
                         "created_at": entry.get("created_at", ""),
                         "mode": entry.get("mode", "continue"),
-                        "completeness": entry.get("completeness"),
                         "mood": entry.get("mood", ""),
                         "tags": entry.get("tags", []),
                         "visibility": entry.get("visibility", "active"),
@@ -291,32 +267,10 @@ class DarkroomStore:
             "count": state.get("count", 0),
             "previous_entry_id": entry.get("previous_entry_id", ""),
             "continuation_anchor_entries": len(entry.get("continuation_anchor", {}).get("entry_ids", [])),
-            "completeness": {
-                "previous": entry.get("previous_completeness"),
-                "current": entry.get("completeness"),
-            },
             "mood": entry.get("mood", ""),
             "tags": entry.get("tags", []),
             "locked_until": str(entry.get("locked_until") or ""),
             "visible_note": f"{ai_name} 进入了暗房。",
-        }
-
-    def _not_ready_payload_unlocked(self, entry: dict) -> dict | None:
-        completeness = entry.get("completeness")
-        try:
-            ready = float(completeness) >= 1.0
-        except (TypeError, ValueError):
-            ready = False
-        if ready:
-            return None
-        return {
-            "status": "not_ready",
-            "entry_id": entry.get("id", ""),
-            "room_id": self._entry_room_id(entry),
-            "revision": entry.get("revision", 1),
-            "created_at": entry.get("created_at", ""),
-            "completeness": completeness,
-            "required_completeness": 1.0,
         }
 
     def _locked_payload_unlocked(self, entry: dict) -> dict | None:
@@ -367,8 +321,6 @@ class DarkroomStore:
             "last_room_id": self._entry_room_id(last) if last else "",
             "last_entry_id": last.get("id", "") if last else "",
             "last_entered_at": last_active_at,
-            "last_completeness": last.get("completeness") if last else None,
-            "previous_completeness": last.get("previous_completeness") if last else None,
             "last_mood": last.get("mood", "") if last else "",
             "last_tags": last.get("tags", []) if last else [],
             "last_release_at": last_release_at,
@@ -387,8 +339,6 @@ class DarkroomStore:
             "last_room_id": str(state.get("last_room_id") or ""),
             "last_entry_id": str(state.get("last_entry_id") or ""),
             "last_entered_at": str(state.get("last_entered_at") or ""),
-            "last_completeness": state.get("last_completeness"),
-            "previous_completeness": state.get("previous_completeness"),
             "last_mood": str(state.get("last_mood") or ""),
             "last_tags": state.get("last_tags") if isinstance(state.get("last_tags"), list) else [],
             "last_release_at": str(state.get("last_release_at") or ""),
@@ -463,7 +413,6 @@ class DarkroomStore:
             "kind": "local_continuation",
             "generated_at": _now_iso(),
             "entry_ids": [str(entry.get("id") or "") for entry in recent if entry.get("id")],
-            "last_completeness": recent[-1].get("completeness"),
             "notes": [
                 {
                     "created_at": str(entry.get("created_at") or ""),
