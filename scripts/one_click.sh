@@ -926,6 +926,7 @@ EOF
 
   Darkroom:
     Use darkroom_continue_context(limit=3) only to read the current active room draft, continue private reflection, and judge completeness.
+    darkroom_enter note should default to first person; do not use third-person self-reference unless quoting external facts or Xiaoyu.
     darkroom_enter updates the current active room draft by default; pass new_room=true to open a separate room.
     External client tool lists should expose darkroom_enter(note=..., visibility="active", lock_for="6h", new_room=false) and read-only darkroom_view.
     visibility can be active / archived / retracted.

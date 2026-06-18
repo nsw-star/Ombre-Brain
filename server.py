@@ -7212,7 +7212,7 @@ async def darkroom_enter(
     lock_for: str = "",
     new_room: bool = False,
 ) -> dict:
-    """写入一段未显影的私密反思；默认更新当前 active 房间草稿，new_room=true 新开房间；不回显 note 正文。"""
+    """写入一段未显影的私密反思；默认第一人称，不用第三人称自述；默认更新当前 active 房间草稿，new_room=true 新开房间；不回显 note 正文。"""
     try:
         return darkroom_store.enter(
             note,

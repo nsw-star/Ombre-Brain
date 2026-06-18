@@ -776,7 +776,7 @@ rm /srv/ombre-brain/state/.dashboard_auth.json
 | `read_bucket` | 按 bucket_id 精确读取完整记忆；准备改旧记忆或追细节前使用。 |
 | `comment_bucket` | 给已有记忆追加年轮/评论；适合“读到旧记忆后的新感受或补充”。 |
 | `hold` | 写单条长期记忆；可传 `date` 记录事件日期；显式 `domain` 会覆盖自动领域；显式 `valence/arousal` 会覆盖自动情绪；`whisper=True` 写无源悄悄话。 |
-| `darkroom_enter` | 写入私密暗房；默认更新当前 active 房间草稿，可传 `new_room=true` 新开房间，可传 `lock_for="6h"` / `"3d"`；只返回门口状态，不回显正文。 |
+| `darkroom_enter` | 写入私密暗房；note 默认第一人称，不用第三人称称呼自己；默认更新当前 active 房间草稿，可传 `new_room=true` 新开房间，可传 `lock_for="6h"` / `"3d"`；只返回门口状态，不回显正文。 |
 | `darkroom_continue_context` | 读取当前 active 房间草稿供 AI 继续反思和判断完整度；不要转述给用户。 |
 | `darkroom_view` | 只读查看完整且已解锁的暗房内容；可按 room_id 返回该房间全部 revisions；未完整返回 `not_ready`，未到锁门时间只返回 `unlock_at`，不返回正文。 |
 | `grow` | 长内容摘记；只喂已经筛过的长期记忆点，不要整篇流水账原样写入。 |
