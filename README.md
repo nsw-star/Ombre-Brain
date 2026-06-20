@@ -494,7 +494,7 @@ gateway:
 prompt_cache: "anthropic_explicit"
 ```
 
-这个模式不会加顶层 `cache_control`，而是把 `cache_control` 挂到最后一条 message 的 content block 上。不确定上游是否支持时保持关闭：
+这个模式不会加顶层 `cache_control`，而是优先把 `cache_control` 挂到 `system` 的最后一个 content block 上；没有 `system` 时，才挂到当前最新 user message 之前的最后一条历史消息上。这样缓存断点尽量落在稳定前缀末尾。不确定上游是否支持时保持关闭：
 
 ```yaml
 prompt_cache: ""

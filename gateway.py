@@ -3814,12 +3814,26 @@ class GatewayService:
         payload: dict[str, Any],
         cache_control: dict[str, str],
     ) -> None:
-        for message in reversed(payload.get("messages", [])):
+        attached = self._attach_cache_control_to_anthropic_content(payload, "system", cache_control)
+        messages = payload.get("messages", [])
+        if not isinstance(messages, list):
+            return
+
+        for message in reversed(messages[:-1]):
+            if not isinstance(message, dict):
+                continue
+            if self._attach_cache_control_to_anthropic_content(message, "content", cache_control):
+                attached = True
+                break
+
+        if attached:
+            return
+
+        for message in reversed(messages):
             if not isinstance(message, dict):
                 continue
             if self._attach_cache_control_to_anthropic_content(message, "content", cache_control):
                 return
-        self._attach_cache_control_to_anthropic_content(payload, "system", cache_control)
 
     def _attach_cache_control_to_anthropic_content(
         self,
