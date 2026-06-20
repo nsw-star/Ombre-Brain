@@ -254,9 +254,11 @@ moment_annotations:
   max_evidence_chars: 120
 
 # --- Gateway / 网关注入配置 ---
-# Exposes an OpenAI-compatible /v1/chat/completions endpoint that injects
-# Core Memory + Recent Context + Recalled Memory before forwarding upstream
-# 暴露 OpenAI 兼容的 /v1/chat/completions 网关，在转发上游模型前自动注入
+# Exposes OpenAI-compatible /v1/chat/completions and Anthropic-compatible
+# /v1/messages endpoints that inject Core Memory + Recent Context + Recalled Memory
+# before forwarding upstream.
+# 暴露 OpenAI 兼容的 /v1/chat/completions 和 Anthropic 兼容的 /v1/messages 网关，
+# 在转发上游模型前自动注入
 # 核心记忆 + 最近上下文 + 动态召回记忆
 gateway:
   host: "0.0.0.0"
@@ -269,7 +271,8 @@ gateway:
     - "gpt-4.1"
   # Optional prompt cache hints / 可选提示缓存参数
   # openai: send prompt_cache_key using X-Ombre-Session-Id; leave empty for other providers.
-  # openai: 使用 X-Ombre-Session-Id 发送 prompt_cache_key；其他供应商保持空值。
+  # anthropic: send native top-level cache_control on protocol: anthropic upstreams.
+  # openai: 使用 X-Ombre-Session-Id 发送 prompt_cache_key；anthropic: 在原生 Anthropic 上游发送 cache_control。
   prompt_cache: "openai"
   # prompt_cache_retention: "24h"  # Optional for supported OpenAI models / 支持模型可选
   # Optional multi-upstream mode / 可选多上游模式
@@ -281,6 +284,7 @@ gateway:
   # models 可用字典写别名：id 是客户端看到的名字，upstream_model 是发给上游的真实名字。
   # upstreams:
   #   - name: "deepseek"
+  #     protocol: "openai"  # default; forwards to /chat/completions
   #     base_url: "https://api.deepseek.com/v1"
   #     api_key_env: "OMBRE_GATEWAY_DEEPSEEK_API_KEY"
   #     # Optional fallback keys. Retryable errors switch to the next key.
@@ -296,11 +300,23 @@ gateway:
   #       - id: "deepseek-a/deepseek-v4"
   #         upstream_model: "deepseek-v4"
   #   - name: "siliconflow"
+  #     protocol: "openai"
   #     base_url: "https://api.siliconflow.cn/v1"
   #     api_key_env: "OMBRE_GATEWAY_SILICONFLOW_API_KEY"
   #     models:
   #       - "Qwen/Qwen3-32B"
   #       - "THUDM/GLM-4-32B"
+  #   - name: "anthropic"
+  #     protocol: "anthropic"  # forwards /v1/messages to upstream /messages
+  #     base_url: "https://api.anthropic.com/v1"
+  #     api_key_env: "OMBRE_GATEWAY_ANTHROPIC_API_KEY"
+  #     anthropic_version: "2023-06-01"
+  #     prompt_cache: "anthropic"
+  #     # prompt_cache_retention: "1h"  # optional; default cache TTL is 5 minutes
+  #     default_model: "claude-sonnet"
+  #     models:
+  #       - id: "claude-sonnet"
+  #         upstream_model: "claude-sonnet-4-6"
   head_recent_hours: 72
   recent_context_reentry_idle_hours: 24
   recent_context_cooldown_hours: 6
@@ -374,6 +390,7 @@ gateway:
   #   OMBRE_GATEWAY_DEEPSEEK_API_KEY_1
   #   OMBRE_GATEWAY_DEEPSEEK_API_KEY_2
   #   OMBRE_GATEWAY_SILICONFLOW_API_KEY
+  #   OMBRE_GATEWAY_ANTHROPIC_API_KEY
 
 memory_diffusion:
   enabled: true

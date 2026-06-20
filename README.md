@@ -51,13 +51,13 @@
 
 | 能力 | 说明 | 主要文件 |
 | --- | --- | --- |
-| OpenAI / Anthropic-compatible Gateway | 提供 `/v1/chat/completions`、`/v1/messages`、`/v1/models`，聊天客户端可直接接入 | `gateway.py` |
+| OpenAI / Anthropic-compatible Gateway | 提供 `/v1/chat/completions`、`/v1/messages`、`/v1/models`，聊天客户端可直接接入；Anthropic upstream 可走原生 `/messages` | `gateway.py` |
 | 自动记忆注入 | 请求转发前按策略注入 Recent Context、Recalled Memory、Diffused Memory；Long-term State Summary 按间隔出现 | `gateway.py` |
 | Persona State Engine | 保存 AI 回复后的全局人格、关系状态、每个 session 的短期心情 | `persona_engine.py` |
 | Portrait / Handoff | 每日维护 Persona、用户画像、关系画像和近期状态；新窗口用 `is_session_start=true` 或 `mode="handoff"` 恢复自我入口、身份与生活背景 | `portrait_engine.py`、`server.py`、`dashboard.html` |
 | 召回冷却 | 按 `X-Ombre-Session-Id` 记录轮次和最近注入，避免同一条记忆反复贴脸 | `gateway_state.py` |
 | 跨窗口短时上下文 | Gateway 记录成功聊天轮次；遇到“刚刚/刚才/上一句/暗号”等短时问题时注入 Just Now Chat Context，优先回答最近几轮而不是查长期记忆 | `gateway.py`、`gateway_state.py` |
-| 多上游模型路由和备用 key | `gateway.upstreams` 可配置多个 OpenAI-compatible provider，按请求里的 `model` 路由；同一上游可配置多个 key，失败时自动尝试下一个 | `gateway.py`、`config.example.yaml` |
+| 多上游模型路由和备用 key | `gateway.upstreams` 可配置多个 OpenAI-compatible 或 Anthropic-native provider，按请求里的 `model` 路由；同一上游可配置多个 key，失败时自动尝试下一个 | `gateway.py`、`config.example.yaml` |
 | 工具调用和流式兼容 | 透传 `tools / tool_choice / tool_calls`，支持 SSE 流式响应，兼容部分 reasoning_content 场景；Persona post-reply 评估会跳过带 `tool_calls` 的 assistant 中间态，只评估最终自然语言回复 | `gateway.py` |
 | Memory Edge / Node | 自动生成显式记忆关系边；`memory_nodes.sqlite` 为 bucket 生成 salience 与 facets，Gateway 和 `breath()` 可沿边做多跳联想浮现 | `memory_edges.py`、`memory_nodes.py`、`memory_diffusion.py`、`reflection_engine.py` |
 | Memory Moment | 将 Markdown bucket 解析成 `body / moment / fact / original / context / evidence_context / reflection / feeling / followup / affect_anchor / favorite_reason / comment` 等片段，写入 `memory_moments.sqlite`，并生成同桶前后文边、年轮/情绪温度边；`breath(query=...)` 以 moment 为单位召回和扩散 | `memory_moments.py`、`server.py` |
@@ -274,7 +274,7 @@ cp config.example.yaml /srv/ombre-brain/config.yaml
 
 编辑 `/srv/ombre-brain/config.yaml`：
 
-- `gateway.upstreams`：配置上游 OpenAI-compatible provider；同一上游多个 key 用 `api_key_envs`。
+- `gateway.upstreams`：配置上游 provider；默认 `protocol: "openai"`，原生 Anthropic 上游写 `protocol: "anthropic"`；同一上游多个 key 用 `api_key_envs`。
 - `gateway.default_session_id`：少数兼容路由没传 `X-Ombre-Session-Id` 时的默认房间名，通用部署不要照抄旧示例名。
 - `gateway.cooldown_hours`：动态记忆再次出现的冷却小时，默认 `6`。
 - `gateway.skip_recent_rounds`：最近几轮里已经注入过的记忆优先避开，默认 `5`。
@@ -381,9 +381,11 @@ embedding:
 `gateway.upstreams` 可以配多个站点，也可以给同一个站点配多个 key。常用字段如下：
 
 - `name`：上游站点的内部名字，可以继续用 `provider-a` / `provider-b` / `provider-c`；不一定要和模型别名一致。
-- `base_url`：模型站 OpenAI-compatible 地址，通常以 `/v1` 结尾。
+- `protocol`：默认 `openai`，转发到上游 `/chat/completions`；写 `anthropic` 时，`/v1/messages` 会原生转发到上游 `/messages`。
+- `base_url`：模型站 API 地址，通常以 `/v1` 结尾。
 - `api_key_env`：单个 key 时继续用这个。
 - `api_key_envs`：多个备用 key 时用这个列表。
+- `anthropic_version`：仅 `protocol: "anthropic"` 使用，默认 `2023-06-01`。
 - `models`：客户端可选择的模型列表；字符串写法会原样转发，字典写法可设置别名。
 
 单个站点、单个 key、模型名不会重复时，保持最简单写法就行：
@@ -392,6 +394,7 @@ embedding:
 gateway:
   upstreams:
     - name: "provider-c"
+      protocol: "openai"
       base_url: "https://c.example.com/v1"
       api_key_env: "OMBRE_GATEWAY_PROVIDER_C_API_KEY"
       models:
@@ -407,6 +410,7 @@ gateway:
 gateway:
   upstreams:
     - name: "provider-a"
+      protocol: "openai"
       base_url: "https://api.example.com/v1"
       default_model: "model-a"
       api_key_envs:
@@ -424,12 +428,14 @@ gateway:
   upstream_default_model: "site-a/deepseek-v4"
   upstreams:
     - name: "site-a"
+      protocol: "openai"
       base_url: "https://a.example.com/v1"
       api_key_env: "OMBRE_GATEWAY_SITE_A_API_KEY"
       models:
         - id: "site-a/deepseek-v4"
           upstream_model: "deepseek-v4"
     - name: "site-b"
+      protocol: "openai"
       base_url: "https://b.example.com/v1"
       api_key_env: "OMBRE_GATEWAY_SITE_B_API_KEY"
       models:
@@ -458,7 +464,28 @@ gateway:
 
 Gateway 会按请求里的 `model` 找上游。遇到 `401/403/429/500/502/503/504` 或网络错误，会临时冷却当前 key，并尝试同上游的下一个 key。`400`、模型名错误、上下文太长这类请求本身的问题不会换 key。冷却时间由 `gateway.upstream_key_cooldown_seconds` 控制，默认 300 秒。
 
-`prompt_cache: "openai"` 和 `prompt_cache_retention: "24h"` 是 OpenAI prompt cache 提示。Gateway 会给上游请求加 `prompt_cache_key` 和 `prompt_cache_retention`，只适合确认支持这些字段的上游；不确定时保持关闭：
+Anthropic 原生上游示例：
+
+```yaml
+gateway:
+  upstream_default_model: "claude-sonnet"
+  upstreams:
+    - name: "anthropic"
+      protocol: "anthropic"
+      base_url: "https://api.anthropic.com/v1"
+      api_key_env: "OMBRE_GATEWAY_ANTHROPIC_API_KEY"
+      anthropic_version: "2023-06-01"
+      prompt_cache: "anthropic"
+      # prompt_cache_retention: "1h"  # 不写时走 Anthropic 默认 5 分钟 TTL
+      default_model: "claude-sonnet"
+      models:
+        - id: "claude-sonnet"
+          upstream_model: "claude-sonnet-4-6"
+```
+
+`protocol: "anthropic"` 只影响 Anthropic-compatible 客户端打来的 `/v1/messages`：Gateway 仍会先注入记忆，再用 `x-api-key` 和 `anthropic-version` 转发到上游 `/messages`。这样 prompt cache、`cache_read_input_tokens` / `cache_creation_input_tokens` 这类 Anthropic 原生字段会保留下来。普通 OpenAI-compatible 客户端继续走 `/v1/chat/completions`。
+
+`prompt_cache: "openai"` 和 `prompt_cache_retention: "24h"` 是 OpenAI prompt cache 提示。Gateway 会给上游请求加 `prompt_cache_key` 和 `prompt_cache_retention`。`prompt_cache: "anthropic"` 只在 `protocol: "anthropic"` 上游生效，会给原生 Messages 请求加顶层 `cache_control: {"type": "ephemeral"}`；`prompt_cache_retention: "1h"` 会改成 1 小时 TTL。不确定上游是否支持时保持关闭：
 
 ```yaml
 prompt_cache: ""
@@ -563,6 +590,8 @@ Endpoint: http://<host>:18002/v1/messages
 API Key:  OMBRE_GATEWAY_TOKEN 的值，可用 x-api-key
 Header:   X-Ombre-Session-Id: my-main
 ```
+
+模型列表走 `GET http://<host>:18002/v1/models`，带 `x-api-key` 或 `anthropic-version` 时返回 Anthropic 形状；带 `Authorization: Bearer ...` 时返回 OpenAI 形状。
 
 即使某些兼容路径有历史 fallback，也建议总是显式传 `X-Ombre-Session-Id`。
 

@@ -590,6 +590,7 @@ class GatewayService:
                     {
                         "name": upstream["name"],
                         "base_url": upstream["base_url"],
+                        "protocol": upstream.get("protocol", "openai"),
                         "default_model": upstream["default_model"],
                         "models": upstream["models"],
                         "prompt_cache": upstream.get("prompt_cache", ""),
@@ -1249,6 +1250,42 @@ class GatewayService:
                 injection_debug,
             )
 
+        route = self._resolve_upstream_for_model(str(forward_payload.get("model") or ""))
+        if self._upstream_uses_anthropic_protocol(route["upstream"]):
+            upstream_response = await self._forward_anthropic_upstream(
+                forward_payload,
+                route,
+                request=request,
+            )
+            if 200 <= upstream_response.status_code < 300:
+                upstream_usage = self._log_cache_usage_from_response(
+                    session_id,
+                    forward_payload["model"],
+                    upstream_response,
+                    route="/v1/messages",
+                )
+                assistant_message = self._extract_assistant_message_from_anthropic_response(upstream_response)
+                await self._record_successful_round(
+                    session_id,
+                    recalled_ids,
+                    injection_debug,
+                    user_message=persona_user_message,
+                    assistant_message=assistant_message,
+                    model=forward_payload["model"],
+                    client=client_label,
+                    route="/v1/messages",
+                    upstream_usage=upstream_usage,
+                )
+                await self._update_persona_after_assistant_message(
+                    session_id,
+                    persona_user_message,
+                    assistant_message,
+                    recalled_ids or [],
+                )
+                return self._proxy_response(upstream_response)
+
+            return self._proxy_anthropic_error_response(upstream_response)
+
         upstream_response = await self._forward_upstream(forward_payload)
         if 200 <= upstream_response.status_code < 300:
             upstream_response, memory_detail_debug = await self._maybe_retry_with_memory_detail(
@@ -1288,9 +1325,35 @@ class GatewayService:
         return self._proxy_anthropic_error_response(upstream_response)
 
     async def handle_models(self, request: Request) -> Response:
-        auth_result = self._authorize(request.headers.get("Authorization", ""))
+        anthropic_request = bool(
+            (request.headers.get("x-api-key") or "").strip()
+            or (request.headers.get("anthropic-version") or "").strip()
+        )
+        if anthropic_request:
+            auth_result = self._authorize_anthropic_request(request)
+        else:
+            auth_result = self._authorize(request.headers.get("Authorization", ""))
         if auth_result is not None:
             return auth_result
+
+        if anthropic_request:
+            data = [
+                {
+                    "type": "model",
+                    "id": model,
+                    "display_name": model,
+                    "created_at": "1970-01-01T00:00:00Z",
+                }
+                for model in self.upstream_models
+            ]
+            return JSONResponse(
+                {
+                    "data": data,
+                    "has_more": False,
+                    "first_id": data[0]["id"] if data else None,
+                    "last_id": data[-1]["id"] if data else None,
+                }
+            )
 
         return JSONResponse(
             {
@@ -1898,6 +1961,75 @@ class GatewayService:
             return last_response
         return self._upstream_request_error_response(upstream, model, last_error)
 
+    async def _forward_anthropic_upstream(
+        self,
+        payload: dict,
+        route: dict[str, Any],
+        *,
+        request: Request | None = None,
+    ) -> httpx.Response:
+        upstream = route["upstream"]
+        model = route["public_model"]
+        upstream_payload = self._anthropic_payload_for_upstream(payload, route)
+        url = f"{upstream['base_url']}/messages"
+        key_entries = self._available_upstream_api_keys(upstream)
+        last_error: Exception | None = None
+        last_response: httpx.Response | None = None
+
+        for attempt, key_entry in enumerate(key_entries, start=1):
+            started_at = time.perf_counter()
+            try:
+                response = await self.http_client.post(
+                    url,
+                    headers=self._anthropic_upstream_headers(upstream, key_entry, request=request),
+                    json=upstream_payload,
+                )
+            except httpx.RequestError as exc:
+                latency_ms = int((time.perf_counter() - started_at) * 1000)
+                last_error = exc
+                self._cool_down_upstream_key(upstream, key_entry)
+                logger.warning(
+                    "Gateway Anthropic upstream request failed | upstream=%s key=%s model=%s upstream_model=%s "
+                    "attempt=%s/%s latency_ms=%s error=%s",
+                    upstream["name"],
+                    key_entry["label"],
+                    model,
+                    route["upstream_model"],
+                    attempt,
+                    len(key_entries),
+                    latency_ms,
+                    exc,
+                )
+                continue
+
+            latency_ms = int((time.perf_counter() - started_at) * 1000)
+            last_response = response
+            logger.info(
+                "Gateway Anthropic upstream response | upstream=%s key=%s model=%s upstream_model=%s "
+                "status=%s attempt=%s/%s latency_ms=%s",
+                upstream["name"],
+                key_entry["label"],
+                model,
+                route["upstream_model"],
+                response.status_code,
+                attempt,
+                len(key_entries),
+                latency_ms,
+            )
+            if 200 <= response.status_code < 300:
+                self._clear_upstream_key_cooldown(upstream, key_entry)
+                return response
+            if not self._should_retry_upstream_status(response.status_code):
+                return response
+            self._cool_down_upstream_key(upstream, key_entry)
+            if attempt < len(key_entries):
+                continue
+            return response
+
+        if last_response is not None:
+            return last_response
+        return self._upstream_request_error_response(upstream, model, last_error)
+
     async def _open_upstream_stream(
         self,
         route: dict[str, Any],
@@ -1945,6 +2077,83 @@ class GatewayService:
             latency_ms = int((time.perf_counter() - started_at) * 1000)
             logger.info(
                 "Gateway upstream response | upstream=%s key=%s model=%s upstream_model=%s "
+                "status=%s attempt=%s/%s latency_ms=%s",
+                upstream["name"],
+                key_entry["label"],
+                model,
+                route["upstream_model"],
+                upstream_response.status_code,
+                attempt,
+                len(key_entries),
+                latency_ms,
+            )
+            if 200 <= upstream_response.status_code < 300:
+                self._clear_upstream_key_cooldown(upstream, key_entry)
+                return upstream_response
+
+            body = await upstream_response.aread()
+            await upstream_response.aclose()
+            last_response = httpx.Response(
+                status_code=upstream_response.status_code,
+                content=body,
+                headers=upstream_response.headers,
+            )
+            if not self._should_retry_upstream_status(upstream_response.status_code):
+                return last_response
+            self._cool_down_upstream_key(upstream, key_entry)
+            if attempt < len(key_entries):
+                continue
+            return last_response
+
+        if last_response is not None:
+            return last_response
+        return self._upstream_request_error_response(upstream, model, last_error)
+
+    async def _open_anthropic_upstream_stream(
+        self,
+        route: dict[str, Any],
+        payload: dict,
+    ) -> httpx.Response:
+        upstream = route["upstream"]
+        model = route["public_model"]
+        upstream_payload = self._anthropic_payload_for_upstream(payload, route)
+        upstream_payload["stream"] = True
+        url = f"{upstream['base_url']}/messages"
+        key_entries = self._available_upstream_api_keys(upstream)
+        last_error: Exception | None = None
+        last_response: httpx.Response | None = None
+
+        for attempt, key_entry in enumerate(key_entries, start=1):
+            request = self.http_client.build_request(
+                "POST",
+                url,
+                headers=self._anthropic_upstream_headers(upstream, key_entry),
+                json=upstream_payload,
+            )
+            started_at = time.perf_counter()
+            try:
+                upstream_response = await self.http_client.send(request, stream=True)
+            except httpx.RequestError as exc:
+                latency_ms = int((time.perf_counter() - started_at) * 1000)
+                last_error = exc
+                self._cool_down_upstream_key(upstream, key_entry)
+                logger.warning(
+                    "Gateway Anthropic upstream stream failed | upstream=%s key=%s model=%s upstream_model=%s "
+                    "attempt=%s/%s latency_ms=%s error=%s",
+                    upstream["name"],
+                    key_entry["label"],
+                    model,
+                    route["upstream_model"],
+                    attempt,
+                    len(key_entries),
+                    latency_ms,
+                    exc,
+                )
+                continue
+
+            latency_ms = int((time.perf_counter() - started_at) * 1000)
+            logger.info(
+                "Gateway Anthropic upstream response | upstream=%s key=%s model=%s upstream_model=%s "
                 "status=%s attempt=%s/%s latency_ms=%s",
                 upstream["name"],
                 key_entry["label"],
@@ -3475,6 +3684,255 @@ class GatewayService:
             return {}
         return parsed if isinstance(parsed, dict) else {}
 
+    def _anthropic_upstream_headers(
+        self,
+        upstream: dict[str, Any],
+        key_entry: dict[str, str],
+        *,
+        request: Request | None = None,
+    ) -> dict[str, str]:
+        version = str(upstream.get("anthropic_version") or "").strip()
+        if not version and request is not None:
+            version = str(request.headers.get("anthropic-version") or "").strip()
+        if not version:
+            version = "2023-06-01"
+        beta = str(upstream.get("anthropic_beta") or "").strip()
+        if not beta and request is not None:
+            beta = str(request.headers.get("anthropic-beta") or "").strip()
+
+        headers = {
+            "x-api-key": key_entry["value"],
+            "anthropic-version": version,
+            "Content-Type": "application/json",
+        }
+        if beta:
+            headers["anthropic-beta"] = beta
+        return headers
+
+    def _anthropic_payload_for_upstream(
+        self,
+        payload: dict[str, Any],
+        route: dict[str, Any],
+    ) -> dict[str, Any]:
+        upstream = route["upstream"]
+        upstream_payload: dict[str, Any] = {
+            "model": route["upstream_model"],
+            "messages": [],
+            "max_tokens": self._anthropic_max_tokens(payload),
+        }
+
+        system_parts: list[str] = []
+        for message in payload.get("messages", []):
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role") or "").strip()
+            if role == "system":
+                system_text = self._coerce_message_text(message.get("content")).strip()
+                if system_text:
+                    system_parts.append(system_text)
+                continue
+            if role == "tool":
+                tool_use_id = str(message.get("tool_call_id") or message.get("tool_use_id") or "").strip()
+                if tool_use_id:
+                    upstream_payload["messages"].append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": tool_use_id,
+                                    "content": self._coerce_message_text(message.get("content")),
+                                }
+                            ],
+                        }
+                    )
+                continue
+            if role not in {"user", "assistant"}:
+                continue
+            content = (
+                self._openai_message_to_anthropic_content(message)
+                if role == "assistant"
+                else self._openai_content_to_anthropic_blocks(message.get("content"))
+            )
+            upstream_payload["messages"].append({"role": role, "content": content or ""})
+
+        if system_parts:
+            upstream_payload["system"] = "\n\n".join(system_parts)
+
+        for field in ("temperature", "top_p", "stream"):
+            if field in payload:
+                upstream_payload[field] = payload[field]
+        if "stop" in payload:
+            upstream_payload["stop_sequences"] = payload["stop"]
+
+        tools = self._openai_tools_to_anthropic(payload.get("tools"))
+        if tools:
+            upstream_payload["tools"] = tools
+        tool_choice = self._openai_tool_choice_to_anthropic(payload.get("tool_choice"))
+        if tool_choice is not None:
+            upstream_payload["tool_choice"] = tool_choice
+
+        self._apply_anthropic_prompt_cache(upstream_payload, upstream)
+        return upstream_payload
+
+    def _anthropic_max_tokens(self, payload: dict[str, Any]) -> int:
+        try:
+            return max(1, int(payload.get("max_tokens") or self.gateway_cfg.get("anthropic_max_tokens") or 1024))
+        except (TypeError, ValueError):
+            return 1024
+
+    def _apply_anthropic_prompt_cache(
+        self,
+        payload: dict[str, Any],
+        upstream: dict[str, Any],
+    ) -> None:
+        strategy = str(upstream.get("prompt_cache") or "").strip().lower()
+        if strategy != "anthropic" or payload.get("cache_control"):
+            return
+        cache_control: dict[str, str] = {"type": "ephemeral"}
+        retention = str(
+            upstream.get("prompt_cache_ttl")
+            or upstream.get("prompt_cache_retention")
+            or ""
+        ).strip()
+        if retention == "1h":
+            cache_control["ttl"] = "1h"
+        payload["cache_control"] = cache_control
+
+    def _openai_content_to_anthropic_blocks(self, content: Any) -> str | list[dict[str, Any]]:
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return str(content)
+
+        blocks: list[dict[str, Any]] = []
+        for item in content:
+            if isinstance(item, str):
+                blocks.append({"type": "text", "text": item})
+                continue
+            if not isinstance(item, dict):
+                continue
+            block_type = item.get("type")
+            if block_type == "text":
+                blocks.append({"type": "text", "text": str(item.get("text") or "")})
+                continue
+            if block_type == "image_url":
+                image_url = item.get("image_url")
+                url = str(image_url.get("url") if isinstance(image_url, dict) else image_url or "").strip()
+                if not url:
+                    continue
+                blocks.append(self._openai_image_url_to_anthropic_block(url))
+                continue
+        return blocks
+
+    def _openai_image_url_to_anthropic_block(self, url: str) -> dict[str, Any]:
+        if url.startswith("data:") and ";base64," in url:
+            header, data = url.split(";base64,", 1)
+            media_type = header.replace("data:", "", 1) or "image/png"
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": data,
+                },
+            }
+        return {"type": "image", "source": {"type": "url", "url": url}}
+
+    def _openai_tools_to_anthropic(self, tools: Any) -> list[dict[str, Any]]:
+        if not isinstance(tools, list):
+            return []
+        converted: list[dict[str, Any]] = []
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            function = tool.get("function") if tool.get("type") == "function" else tool
+            if not isinstance(function, dict):
+                continue
+            name = str(function.get("name") or "").strip()
+            if not name:
+                continue
+            converted_tool = {
+                "name": name,
+                "input_schema": function.get("parameters") or function.get("input_schema") or {"type": "object"},
+            }
+            description = str(function.get("description") or "").strip()
+            if description:
+                converted_tool["description"] = description
+            converted.append(converted_tool)
+        return converted
+
+    def _openai_tool_choice_to_anthropic(self, tool_choice: Any) -> Any:
+        if tool_choice is None:
+            return None
+        if isinstance(tool_choice, str):
+            return {"auto": {"type": "auto"}, "required": {"type": "any"}, "none": {"type": "none"}}.get(
+                tool_choice,
+                None,
+            )
+        if not isinstance(tool_choice, dict):
+            return None
+        if tool_choice.get("type") == "function":
+            function = tool_choice.get("function")
+            name = str(function.get("name") if isinstance(function, dict) else "").strip()
+            if name:
+                return {"type": "tool", "name": name}
+        return None
+
+    def _extract_assistant_message_from_anthropic_response(
+        self,
+        upstream_response: httpx.Response,
+    ) -> dict[str, Any] | None:
+        try:
+            body = upstream_response.json()
+        except ValueError:
+            return None
+        return self._anthropic_response_body_to_openai_message(body)
+
+    def _anthropic_response_body_to_openai_message(self, body: Any) -> dict[str, Any] | None:
+        if not isinstance(body, dict):
+            return None
+        content = body.get("content")
+        if not isinstance(content, list):
+            return None
+        text_parts: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
+        for index, block in enumerate(content):
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            if block_type == "text":
+                text = str(block.get("text") or "")
+                if text:
+                    text_parts.append(text)
+                continue
+            if block_type == "tool_use":
+                name = str(block.get("name") or "")
+                if not name:
+                    continue
+                tool_calls.append(
+                    {
+                        "id": str(block.get("id") or f"call_{index}"),
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": json.dumps(
+                                block.get("input") if isinstance(block.get("input"), dict) else {},
+                                ensure_ascii=False,
+                            ),
+                        },
+                    }
+                )
+
+        if not text_parts and not tool_calls:
+            return None
+        message: dict[str, Any] = {"role": "assistant", "content": "\n".join(text_parts) if text_parts else None}
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+        return message
+
     async def _stream_upstream_as_anthropic(
         self,
         payload: dict,
@@ -3486,6 +3944,17 @@ class GatewayService:
     ) -> Response:
         model = str(payload.get("model") or "").strip()
         route = self._resolve_upstream_for_model(model)
+        if self._upstream_uses_anthropic_protocol(route["upstream"]):
+            return await self._stream_native_anthropic_upstream(
+                route,
+                payload,
+                session_id,
+                recalled_ids,
+                user_message,
+                client=client,
+                injection_debug=injection_debug,
+            )
+
         upstream_response = await self._open_upstream_stream(route, payload)
 
         if not 200 <= upstream_response.status_code < 300:
@@ -3659,6 +4128,72 @@ class GatewayService:
                     "message_stop",
                     {"type": "message_stop"},
                 )
+            finally:
+                await upstream_response.aclose()
+
+        return StreamingResponse(
+            stream_body(),
+            status_code=upstream_response.status_code,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    async def _stream_native_anthropic_upstream(
+        self,
+        route: dict[str, Any],
+        payload: dict,
+        session_id: str,
+        recalled_ids: list[str] | None,
+        user_message: str,
+        client: str = "",
+        injection_debug: dict[str, Any] | None = None,
+    ) -> Response:
+        model = str(payload.get("model") or "").strip()
+        upstream_response = await self._open_anthropic_upstream_stream(route, payload)
+
+        if not 200 <= upstream_response.status_code < 300:
+            body = await upstream_response.aread()
+            await upstream_response.aclose()
+            return self._proxy_anthropic_error_response(
+                httpx.Response(
+                    status_code=upstream_response.status_code,
+                    content=body,
+                    headers=upstream_response.headers,
+                )
+            )
+
+        async def stream_body():
+            finalized = False
+            stream_state = self._new_stream_capture_state()
+
+            async def finalize_once() -> None:
+                nonlocal finalized
+                if finalized:
+                    return
+                finalized = True
+                await self._finalize_stream_turn(
+                    session_id=session_id,
+                    model=model,
+                    route="/v1/messages",
+                    stream_state=stream_state,
+                    recalled_ids=recalled_ids,
+                    user_message=user_message,
+                    client=client,
+                    injection_debug=injection_debug,
+                )
+
+            try:
+                async for chunk in upstream_response.aiter_bytes():
+                    if chunk:
+                        self._consume_anthropic_stream_capture_chunk(stream_state, chunk)
+                        if stream_state.get("seen_done"):
+                            await finalize_once()
+                        yield chunk
+                self._consume_anthropic_stream_capture_chunk(stream_state, b"", final=True)
+                await finalize_once()
             finally:
                 await upstream_response.aclose()
 
@@ -9743,6 +10278,122 @@ class GatewayService:
 
         stream_state["buffer"] = buffer
 
+    def _consume_anthropic_stream_capture_chunk(
+        self,
+        stream_state: dict[str, Any],
+        chunk: bytes,
+        final: bool = False,
+    ) -> None:
+        decoder = stream_state["decoder"]
+        if chunk:
+            stream_state["buffer"] += decoder.decode(chunk)
+        if final:
+            stream_state["buffer"] += decoder.decode(b"", final=True)
+
+        buffer = stream_state["buffer"].replace("\r\n", "\n")
+        while "\n\n" in buffer:
+            event_text, buffer = buffer.split("\n\n", 1)
+            self._consume_anthropic_sse_event(stream_state, event_text)
+
+        if final and buffer.strip():
+            self._consume_anthropic_sse_event(stream_state, buffer)
+            buffer = ""
+
+        stream_state["buffer"] = buffer
+
+    def _consume_anthropic_sse_event(self, stream_state: dict[str, Any], event_text: str) -> None:
+        event_name = ""
+        data_lines = []
+        for raw_line in event_text.split("\n"):
+            line = raw_line.strip()
+            if line.startswith("event:"):
+                event_name = line[6:].strip()
+                continue
+            if line.startswith("data:"):
+                data_lines.append(line[5:].strip())
+
+        if not data_lines:
+            return
+        payload = "\n".join(data_lines).strip()
+        if not payload:
+            return
+        try:
+            event = json.loads(payload)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(event, dict):
+            return
+
+        event_type = str(event.get("type") or event_name or "").strip()
+        if event_type == "message_start":
+            message = event.get("message")
+            if isinstance(message, dict):
+                usage = message.get("usage")
+                if isinstance(usage, dict):
+                    stream_state["usage"].update(usage)
+            return
+        if event_type == "message_delta":
+            usage = event.get("usage")
+            if isinstance(usage, dict):
+                stream_state["usage"].update(usage)
+            return
+        if event_type == "message_stop":
+            stream_state["seen_done"] = True
+            return
+        if event_type == "content_block_start":
+            index = int(event.get("index") or 0)
+            content_block = event.get("content_block")
+            if not isinstance(content_block, dict):
+                return
+            if content_block.get("type") == "text":
+                text = str(content_block.get("text") or "")
+                if text:
+                    stream_state["message"]["content"] += text
+                return
+            if content_block.get("type") == "tool_use":
+                name = str(content_block.get("name") or "")
+                tool_id = str(content_block.get("id") or f"call_{index}")
+                target = stream_state["tool_calls_by_index"].setdefault(
+                    index,
+                    {
+                        "id": tool_id,
+                        "type": "function",
+                        "function": {"name": name, "arguments": ""},
+                    },
+                )
+                target["id"] = tool_id
+                target["type"] = "function"
+                target.setdefault("function", {"name": "", "arguments": ""})["name"] = name
+                input_value = content_block.get("input")
+                if isinstance(input_value, dict) and input_value:
+                    target["function"]["arguments"] = json.dumps(input_value, ensure_ascii=False)
+                return
+        if event_type != "content_block_delta":
+            return
+
+        index = int(event.get("index") or 0)
+        delta = event.get("delta")
+        if not isinstance(delta, dict):
+            return
+        if delta.get("type") == "text_delta":
+            text = str(delta.get("text") or "")
+            if text:
+                stream_state["message"]["content"] += text
+            return
+        if delta.get("type") == "input_json_delta":
+            partial_json = str(delta.get("partial_json") or "")
+            if not partial_json:
+                return
+            target = stream_state["tool_calls_by_index"].setdefault(
+                index,
+                {
+                    "type": "function",
+                    "function": {"name": "", "arguments": ""},
+                },
+            )
+            function = target.setdefault("function", {"name": "", "arguments": ""})
+            function["arguments"] = str(function.get("arguments") or "") + partial_json
+
     def _consume_sse_event(self, stream_state: dict[str, Any], event_text: str) -> None:
         data_lines = []
         for raw_line in event_text.split("\n"):
@@ -10035,6 +10686,18 @@ class GatewayService:
         upstream_payload["model"] = upstream_model
         return upstream_payload
 
+    def _upstream_uses_anthropic_protocol(self, upstream: dict[str, Any]) -> bool:
+        return str(upstream.get("protocol") or "").strip().lower() == "anthropic"
+
+    def _normalize_upstream_protocol(self, raw_protocol: Any) -> str:
+        protocol = str(raw_protocol or "openai").strip().lower()
+        if protocol in {"anthropic", "claude"}:
+            return "anthropic"
+        if protocol in {"openai", "openai-compatible", "chat_completions", "chat-completions"}:
+            return "openai"
+        logger.warning('Unknown gateway upstream protocol "%s"; falling back to openai', protocol)
+        return "openai"
+
     def _available_upstream_api_keys(self, upstream: dict[str, Any]) -> list[dict[str, str]]:
         key_entries = list(upstream.get("api_keys", []))
         if not key_entries:
@@ -10117,12 +10780,18 @@ class GatewayService:
                     raw.get("models", []),
                     default_model,
                 )
+                protocol = self._normalize_upstream_protocol(
+                    raw.get("protocol") or raw.get("api_format") or raw.get("type")
+                )
                 prompt_cache = str(raw.get("prompt_cache") or "").strip().lower()
                 prompt_cache_retention = str(raw.get("prompt_cache_retention") or "").strip()
+                anthropic_version = str(raw.get("anthropic_version") or "2023-06-01").strip()
+                anthropic_beta = str(raw.get("anthropic_beta") or "").strip()
                 upstreams.append(
                     {
                         "name": name,
                         "base_url": base_url,
+                        "protocol": protocol,
                         "api_key": api_keys[0]["value"] if api_keys else "",
                         "api_keys": api_keys,
                         "default_model": default_model,
@@ -10130,6 +10799,8 @@ class GatewayService:
                         "model_map": model_map,
                         "prompt_cache": prompt_cache,
                         "prompt_cache_retention": prompt_cache_retention,
+                        "anthropic_version": anthropic_version,
+                        "anthropic_beta": anthropic_beta,
                     }
                 )
             if upstreams:
@@ -10143,6 +10814,7 @@ class GatewayService:
             {
                 "name": "default",
                 "base_url": self.upstream_base_url,
+                "protocol": self._normalize_upstream_protocol(self.gateway_cfg.get("upstream_protocol")),
                 "api_key": self.upstream_api_key,
                 "api_keys": self._api_key_entries_from_config(
                     self.gateway_cfg,
@@ -10155,6 +10827,10 @@ class GatewayService:
                 "prompt_cache_retention": str(
                     self.gateway_cfg.get("prompt_cache_retention") or ""
                 ).strip(),
+                "anthropic_version": str(
+                    self.gateway_cfg.get("anthropic_version") or "2023-06-01"
+                ).strip(),
+                "anthropic_beta": str(self.gateway_cfg.get("anthropic_beta") or "").strip(),
             }
         ]
 
