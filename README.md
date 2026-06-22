@@ -13,6 +13,7 @@
 - 生产部署建议使用源码构建，并同时运行 `ombre-brain` 和 `ombre-gateway` 两个服务；旧 `docker-compose.user.yml` / `docker-compose.yml` 只适合历史参考，不是当前新版入口。
 - bucket 数据和运行状态必须放在持久化目录里；`state` 不建议放进任何双向同步目录。
 - `X-Ombre-Session-Id` 是本 fork 的 Gateway 会话头，不是 OpenAI 标准字段。它像 Persona 的“房间号”：同一个值会共用同一份 persona_state 和召回冷却记录。可以自己起，比如 `my-main`、`chat-main`，不要照抄旧文档里的 `xiaoyu-main`。
+- 入口分层：稳定后端能力优先做成 HTTP API，MCP 只做薄适配层；能用 Gateway 自动注入、脚本或函数读端点时，不必把所有能力都塞进外部 MCP 工具说明。当前 `conversation_turns` 是短期缓存；长期原文留给 `raw_events.sqlite`，Gateway 成功对话会自动镜像 user/assistant 原文，脚本可走 `/api/ingest-raw` 追加原文，再用 `/api/search-raw` 做兜底检索。
 - 给 Operit 或其它聊天平台写工具使用清单时，先区分 MCP 工具模式和 Gateway 自动注入模式，参考 [`docs/Tool Guide.md`](<docs/Tool Guide.md>)。记得重新复制这份 Tool Guide 到客户端；旧工具说明不会知道 `is_session_start`、`mode="handoff"`、query/date breath、`read_bucket`、`self_anchor`、`daily_impression`、`darkroom_enter`、`darkroom_rooms` 和调试工具边界。
 - [`CLAUDE_PROMPT.md`](CLAUDE_PROMPT.md) 是历史兼容文件名，现在内容按通用 assistant 端编写，不只给 Claude 用。
 
@@ -23,7 +24,6 @@
 - 新窗口/醒来/换窗：优先 `breath(is_session_start=true)` 或 `breath(mode="handoff")`，返回自我入口、User Portrait、Relationship Portrait、Recent Continuity 和少量 Optional Anchors；具体事件继续用 `breath(query="关键词或原句")` 查。
 - `Recent Continuity` 由按真实日期维护的 handoff recent summary、关系天气和短 trace 组成，不再把初次画像初始化摘要伪装成当天日记。
 - Gateway 会记录轻量 `conversation_turns`，写入前会跳过明确的记忆注入块，并剥掉客户端自动塞入的时间/天气/屏幕等附件块。遇到“刚刚/刚才/刚说/上一句/暗号”等短时跨窗口问题时，优先注入 Just Now Chat Context，并跳过默认记忆查询。
-- `conversation_turns` 是短期缓存；长期原文留给 `raw_events.sqlite`。Gateway 成功对话会把 user/assistant 原文自动镜像进去，脚本也可走 `/api/ingest-raw` 追加原文，再用 `/api/search-raw` 做兜底检索；它不是 MCP 工具，不进入工具说明，也默认不自动注入。
 - Gateway 的日期问题会先解析 `昨天/前天/6月15日/2026.06.15/2026-06-15` 这类日期，按事件日期补 Date Recall；同时可给小段 Date Persona Trace。如果本轮已有 Handoff Context，默认跳过泛泛的 Recent Context，避免 handoff、recent_context 和 query breath 重复塞。
 - Daily Portrait Maintainer 会维护用户画像、Haven persona、关系画像和“最近在做什么”，只写 `state/portrait_state.json`，不直接写长期记忆；Dashboard 可手动生成/刷新。
 - 图结构召回的当前主路是 `retrieval_mode=graph`：先找可靠 direct seed，再沿 moment / bucket 边做短摘要联想；`retrieval_mode=bucket` 只是对照模式。
