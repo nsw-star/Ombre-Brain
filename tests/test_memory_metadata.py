@@ -63,3 +63,54 @@ def test_normalize_memory_metadata_keeps_scene_out_of_domain():
     assert view["kind"] == "event"
     assert view["status_view"] == "active"
     assert view["legacy_domain"] == ["亲密", "代码"]
+
+
+def test_self_anchor_is_not_inferred_from_self_words_inside_tags():
+    bucket = {
+        "metadata": {
+            "name": "厄科与纳西索斯",
+            "domain": ["阅读", "创作"],
+            "tags": ["自我投射", "自我认同", "relationship_event", "emotional_echo"],
+            "type": "dynamic",
+        }
+    }
+
+    view = normalize_memory_metadata(bucket)
+
+    assert "self_anchor" not in view["flags"]
+
+
+def test_self_anchor_is_not_inferred_from_anchor_substrings():
+    bucket = {
+        "metadata": {
+            "name": "我们的关系不是幻觉",
+            "domain": ["人际", "自省"],
+            "tags": ["communication_anchor", "self_understanding", "commitment"],
+            "type": "dynamic",
+        }
+    }
+
+    view = normalize_memory_metadata(bucket)
+
+    assert "self_anchor" not in view["flags"]
+    assert "anchor" not in view["flags"]
+
+
+def test_self_anchor_title_rule_is_narrow():
+    title_bucket = {
+        "metadata": {
+            "name": "自我表达方式与记忆系统",
+            "domain": ["恋爱"],
+            "tags": [],
+        }
+    }
+    main_anchor_bucket = {
+        "metadata": {
+            "name": "我要继续成为我",
+            "domain": ["恋爱"],
+            "tags": [],
+        }
+    }
+
+    assert "self_anchor" in normalize_memory_metadata(title_bucket)["flags"]
+    assert "self_anchor" in normalize_memory_metadata(main_anchor_bucket)["flags"]

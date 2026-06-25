@@ -31,6 +31,7 @@ MEMORY_KINDS = {
 }
 
 STATUS_VIEWS = {"active", "unresolved", "digested", "archived", "protected"}
+SELF_ANCHOR_TITLE_ALLOWLIST = {"我要继续成为我"}
 
 DOMAIN_ALIASES = {
     "project_code": {
@@ -169,12 +170,13 @@ def normalize_memory_metadata(bucket: dict[str, Any] | None) -> dict[str, Any]:
     tags = _string_list(meta.get("tags"))
     type_value = _clean(meta.get("type") or bucket.get("type"))
     path_value = _clean(bucket.get("path") or bucket.get("file_path"))
+    name_value = _clean(meta.get("name") or bucket.get("name") or bucket.get("id"))
     text_blob = " ".join(
         item
         for item in [
             type_value,
             path_value,
-            _clean(meta.get("name") or bucket.get("id")),
+            name_value,
             " ".join(legacy_domain),
             " ".join(tags),
             _clean(meta.get("memory_layer")),
@@ -183,7 +185,7 @@ def normalize_memory_metadata(bucket: dict[str, Any] | None) -> dict[str, Any]:
         if item
     )
 
-    flags = _flags(meta, type_value, path_value, legacy_domain, tags)
+    flags = _flags(meta, type_value, path_value, name_value, legacy_domain, tags)
     kind = _normalize_kind(meta.get("kind")) or _infer_kind(meta, text_blob, flags)
     if kind == "profile_fact" and "profile_fact" not in flags:
         flags.append("profile_fact")
@@ -316,6 +318,7 @@ def _flags(
     meta: dict[str, Any],
     type_value: str,
     path_value: str,
+    name_value: str,
     legacy_domain: list[str],
     tags: list[str],
 ) -> list[str]:
@@ -329,8 +332,13 @@ def _flags(
 
     add("pinned", _truthy(meta.get("pinned")))
     add("protected", _truthy(meta.get("protected")))
-    add("anchor", _truthy(meta.get("anchor")) or "anchor" in compact)
-    add("self_anchor", _truthy(meta.get("self_anchor")) or "self_anchor" in compact or "自我" in blob)
+    add("anchor", _truthy(meta.get("anchor")) or _has_exact_marker(legacy_domain, tags, {"anchor", "锚点"}))
+    add(
+        "self_anchor",
+        _truthy(meta.get("self_anchor"))
+        or _has_exact_marker(legacy_domain, tags, {"self_anchor", "selfanchor", "自我锚点"})
+        or _is_self_anchor_title(name_value),
+    )
     add("favorite", "favorite" in compact or "最爱" in blob)
     add("source_record", "source_record" in compact or "sourcerecord" in compact)
     add("profile_fact", "profile_fact" in compact or "profilefact" in compact or bool(_clean(meta.get("profile_kind"))))
@@ -342,3 +350,15 @@ def _truthy(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
+
+def _has_exact_marker(legacy_domain: list[str], tags: list[str], markers: set[str]) -> bool:
+    compact_markers = {_compact(marker) for marker in markers}
+    return any(_compact(item) in compact_markers for item in [*legacy_domain, *tags])
+
+
+def _is_self_anchor_title(name_value: str) -> bool:
+    title = _clean(name_value)
+    if title in SELF_ANCHOR_TITLE_ALLOWLIST:
+        return True
+    return "自我" in title
