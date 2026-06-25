@@ -281,6 +281,105 @@
   .bucket-bulk-message.error { color: var(--negative); }
   .bucket-bulk-message.ok { color: var(--positive); }
 
+  .todo-shell {
+    max-width: 980px;
+    margin: 0 auto;
+  }
+  .todo-toolbar {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+    margin-bottom: 18px;
+  }
+  .todo-title h2 {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 28px;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+  .todo-title p {
+    color: var(--text-dim);
+    font-size: 13px;
+    max-width: 620px;
+  }
+  .todo-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .todo-actions .btn-secondary,
+  .todo-actions .filter-btn {
+    min-height: 36px;
+    padding: 8px 16px;
+  }
+  .todo-status {
+    min-height: 20px;
+    margin-bottom: 12px;
+    color: var(--text-dim);
+    font-size: 13px;
+  }
+  .todo-list {
+    display: grid;
+    gap: 12px;
+  }
+  .todo-item {
+    padding: 16px 18px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    box-shadow: 3px 3px 10px var(--shadow-dark-subtle), -3px -3px 10px var(--shadow-light);
+  }
+  .todo-item.done {
+    opacity: 0.76;
+  }
+  .todo-item-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 14px;
+    margin-bottom: 8px;
+  }
+  .todo-item-title {
+    font-weight: 600;
+    color: var(--accent);
+  }
+  .todo-item-meta {
+    color: var(--text-light);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .todo-item-body {
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+  }
+  .todo-item-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+  }
+  .todo-item-actions button {
+    min-height: 32px;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-solid);
+    color: var(--accent);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .todo-item-actions button:hover {
+    border-color: var(--border-strong);
+  }
+  .todo-item-actions button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
   .bucket-list { display: flex; flex-direction: column; gap: 8px; }
   .bucket-row {
     display: grid;
@@ -2265,6 +2364,7 @@
 
 <div class="tabs">
   <div class="tab active" data-tab="list">记忆桶</div>
+  <div class="tab" data-tab="todos">待办</div>
   <div class="tab" data-tab="breath">Breath 模拟</div>
   <div class="tab" data-tab="reflection">日印象</div>
   <div class="tab" data-tab="dreams">梦境</div>
@@ -2290,6 +2390,27 @@
   <div class="bucket-bulk-message" id="bucket-bulk-message"></div>
   <div class="bucket-list" id="bucket-list">
     <div class="loading">加载中…</div>
+  </div>
+</div>
+
+<div class="content" id="todo-view" style="display:none">
+  <div class="todo-shell">
+    <div class="todo-toolbar">
+      <div class="todo-title">
+        <h2>待办</h2>
+        <p>从记忆桶里的 followup / todo 派生；标完成只改待办表，写回时才归档到 followup_log。</p>
+      </div>
+      <div class="todo-actions">
+        <button type="button" class="filter-btn active" data-todo-status="open" onclick="setTodoStatusFilter('open')">未完成</button>
+        <button type="button" class="filter-btn" data-todo-status="done" onclick="setTodoStatusFilter('done')">已完成</button>
+        <button type="button" class="filter-btn" data-todo-status="all" onclick="setTodoStatusFilter('all')">全部</button>
+        <button type="button" class="btn-secondary" onclick="loadTodos()">刷新</button>
+      </div>
+    </div>
+    <div id="todo-status" class="todo-status"></div>
+    <div id="todo-list" class="todo-list">
+      <div class="loading">打开待办页后加载清单。</div>
+    </div>
   </div>
 </div>
 
@@ -3052,6 +3173,8 @@ let reflectionSelectedDate = formatLocalDate(new Date());
 let reflectionCurrentMonth = monthStart(new Date());
 let configSnapshot = null;
 let gatewayUpstreams = [];
+let todoStatusFilter = 'open';
+let todoItems = [];
 
 function authUrl(path) {
   return path.startsWith('http') ? path : BASE + path;
@@ -3161,6 +3284,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     tab.classList.add('active');
     const target = tab.dataset.tab;
     document.getElementById('list-view').style.display = target === 'list' ? '' : 'none';
+    document.getElementById('todo-view').style.display = target === 'todos' ? '' : 'none';
     document.getElementById('breath-view').style.display = target === 'breath' ? '' : 'none';
     document.getElementById('memory-config-view').style.display = target === 'memory-config' ? '' : 'none';
     document.getElementById('reflection-view').style.display = target === 'reflection' ? '' : 'none';
@@ -3172,6 +3296,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.getElementById('config-view').style.display = target === 'config' ? '' : 'none';
     document.getElementById('upstream-config-view').style.display = target === 'upstream-config' ? '' : 'none';
     document.getElementById('import-view').style.display = target === 'import' ? '' : 'none';
+    if (target === 'todos') loadTodos();
     if (target === 'breath') loadGatewayInjections();
     if (target === 'memory-config') loadConfig();
     if (target === 'reflection') renderReflectionReview();
@@ -3215,6 +3340,7 @@ async function loadBuckets(options) {
     });
     renderBuckets(filterBuckets(allBuckets));
     if (getActiveTab() === 'reflection') renderReflectionReview();
+    if (getActiveTab() === 'todos') loadTodos();
     if (getActiveTab() === 'dreams') loadDreams();
     if (getActiveTab() === 'profile' && !options.skipProfileRefresh) {
       loadPortraitState();
@@ -3229,6 +3355,114 @@ async function loadBuckets(options) {
 function getActiveTab() {
   var tab = document.querySelector('.tab.active');
   return tab ? tab.dataset.tab : 'list';
+}
+
+function todoStatusLabel(status) {
+  if (status === 'all') return '全部';
+  if (status === 'done') return '已完成';
+  if (status === 'ignored') return '已忽略';
+  return '未完成';
+}
+
+function setTodoStatusFilter(status) {
+  todoStatusFilter = status || 'open';
+  document.querySelectorAll('[data-todo-status]').forEach(function(btn) {
+    btn.classList.toggle('active', btn.dataset.todoStatus === todoStatusFilter);
+  });
+  loadTodos();
+}
+
+async function loadTodos() {
+  var list = document.getElementById('todo-list');
+  var status = document.getElementById('todo-status');
+  if (!list || !status) return;
+  list.innerHTML = '<div class="loading">加载待办…</div>';
+  status.textContent = '';
+  try {
+    var res = await authFetch(BASE + '/api/todos?status=' + encodeURIComponent(todoStatusFilter) + '&limit=100');
+    if (!res) return;
+    var data = await res.json();
+    todoItems = Array.isArray(data.todos) ? data.todos : [];
+    status.textContent = todoItems.length + ' 条 · ' + todoStatusLabel(todoStatusFilter);
+    renderTodos(todoItems);
+  } catch (e) {
+    list.innerHTML = '<div class="loading">加载失败: ' + esc(e.message) + '</div>';
+  }
+}
+
+function renderTodos(items) {
+  var list = document.getElementById('todo-list');
+  if (!list) return;
+  if (!items.length) {
+    list.innerHTML = '<div class="loading">没有待办。</div>';
+    return;
+  }
+  list.innerHTML = items.map(renderTodoItem).join('');
+}
+
+function renderTodoItem(todo) {
+  var id = String(todo.id || '');
+  var bucketId = String(todo.source_bucket_id || todo.bucket_id || '');
+  var status = String(todo.status || 'open');
+  var meta = [
+    todo.date || 'recent',
+    todoStatusLabel(status),
+    todo.writeback_at ? '已写回' : '',
+  ].filter(Boolean).join(' · ');
+  var actions = [];
+  if (bucketId) {
+    actions.push('<button type="button" onclick="showDetail(\'' + jsString(bucketId) + '\')">打开桶</button>');
+  }
+  if (status === 'open') {
+    actions.push('<button type="button" onclick="updateTodoStatus(\'' + jsString(id) + '\', \'done\')">标完成</button>');
+    actions.push('<button type="button" onclick="updateTodoStatus(\'' + jsString(id) + '\', \'ignored\')">忽略</button>');
+  } else {
+    actions.push('<button type="button" onclick="updateTodoStatus(\'' + jsString(id) + '\', \'open\')">重新打开</button>');
+  }
+  if (status === 'done') {
+    actions.push('<button type="button" ' + (todo.writeback_at ? 'disabled ' : '') + 'onclick="writebackTodo(\'' + jsString(id) + '\')">写回桶</button>');
+  }
+  return '<div class="todo-item ' + escAttr(status) + '">' +
+    '<div class="todo-item-header">' +
+      '<div class="todo-item-title">' + esc(todo.title || bucketId || '待办') + '</div>' +
+      '<div class="todo-item-meta">' + esc(meta) + '</div>' +
+    '</div>' +
+    '<div class="todo-item-body">' + esc(todo.text || '') + '</div>' +
+    '<div class="todo-item-actions">' + actions.join('') + '</div>' +
+  '</div>';
+}
+
+async function updateTodoStatus(id, status) {
+  try {
+    var res = await authFetch(BASE + '/api/todos/' + encodeURIComponent(id), {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({status: status}),
+    });
+    if (!res) return;
+    if (!res.ok) throw new Error((await res.json().catch(function() { return {}; })).error || '更新失败');
+    await loadTodos();
+  } catch (e) {
+    var target = document.getElementById('todo-status');
+    if (target) target.textContent = '更新失败: ' + e.message;
+  }
+}
+
+async function writebackTodo(id) {
+  try {
+    var res = await authFetch(BASE + '/api/todos/' + encodeURIComponent(id) + '/writeback', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({}),
+    });
+    if (!res) return;
+    if (!res.ok) throw new Error((await res.json().catch(function() { return {}; })).error || '写回失败');
+    await loadTodos();
+    await loadBuckets({ skipProfileRefresh: true });
+  } catch (e) {
+    var target = document.getElementById('todo-status');
+    if (target) target.textContent = '写回失败: ' + e.message;
+  }
 }
 
 function formatDarkroomCompleteness(value) {
@@ -4367,7 +4601,7 @@ function updateStats() {
   const resolved = allBuckets.filter(b => b.resolved).length;
   const digested = allBuckets.filter(b => b.digested).length;
   document.getElementById('stats').textContent =
-    total + ' 桶 · ' + pinned + ' 钉选 · ' + anchors + ' anchor · ' + feels + ' feel · ' + resolved + ' 已解决 · ' + digested + ' 已消化';
+    total + ' 桶 · ' + pinned + ' 钉选 · ' + anchors + ' anchor · ' + feels + ' feel · ' + resolved + ' 不浮现 · ' + digested + ' 已消化';
 }
 
 function buildFilters() {
@@ -4378,7 +4612,7 @@ function buildFilters() {
     { key: 'anchor', label: '⚓ Anchor' },
     { key: 'feel', label: 'Feel' },
     { key: 'daily_impression', label: '日印象' },
-    { key: 'unresolved', label: '⚡ 未解决' },
+    { key: 'unresolved', label: '⚡ 可浮现' },
     { key: 'digested', label: '🌿 已消化' },
     { key: 'archived', label: '📦 归档' },
     { key: 'tag:self_anchor', label: '自我' },
@@ -4392,7 +4626,7 @@ function buildFilters() {
   function renderButton(item) {
     return '<button class="filter-btn ' + (item.key === currentFilter ? 'active' : '') + '" data-filter="' + escAttr(item.key) + '">' + esc(item.label) + '</button>';
   }
-  filters.innerHTML = '<div class="filter-group"><span class="filter-group-label">旧视图</span>' +
+  filters.innerHTML = '<div class="filter-group">' +
     legacyViewFilters.map(renderButton).join('') +
     '</div>';
 
@@ -4712,7 +4946,7 @@ async function showDetail(id) {
         '</div>' +
         '<div class="field"><label>权重分</label>' + b.score.toFixed(4) + '</div>' +
         '<div class="field"><label>激活次数</label>' + (meta.activation_count || 0) + '</div>' +
-        '<div class="field"><label>已解决</label>' + (meta.resolved ? '✓' : '—') + '</div>' +
+        '<div class="field"><label>可浮现</label>' + (meta.resolved ? '—' : '✓') + '</div>' +
         '<div class="field"><label>已消化</label>' + (meta.digested ? '✓' : '—') + '</div>' +
         '<div class="field"><label>钉选</label>' + (meta.pinned ? '✓' : '—') + '</div>' +
         '<div class="field"><label>Anchor</label>' + (meta.anchor ? '✓' : '—') + '</div>' +

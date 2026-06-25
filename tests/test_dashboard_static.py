@@ -236,6 +236,26 @@ def test_dashboard_exposes_portrait_state_panel():
     assert "loadPortraitState();" in load_buckets_block
 
 
+def test_dashboard_exposes_todo_page():
+    html = Path("dashboard.html").read_text(encoding="utf-8")
+    tab_block = html.split("document.querySelectorAll('.tab')", 1)[1].split("let searchTimer", 1)[0]
+    todo_block = html.split("async function loadTodos()", 1)[1].split("function formatDarkroomCompleteness", 1)[0]
+
+    assert 'data-tab="todos"' in html
+    assert 'id="todo-view"' in html
+    assert 'id="todo-list"' in html
+    assert 'id="todo-status"' in html
+    assert "setTodoStatusFilter('open')" in html
+    assert "setTodoStatusFilter('done')" in html
+    assert "setTodoStatusFilter('all')" in html
+    assert "loadTodos()" in tab_block
+    assert "BASE + '/api/todos?status='" in todo_block
+    assert "BASE + '/api/todos/' + encodeURIComponent(id)" in html
+    assert "'/writeback'" in html
+    assert "标完成" in html
+    assert "写回桶" in html
+
+
 def test_dashboard_keeps_compact_legacy_filter_row_and_compatible_filters():
     html = Path("dashboard.html").read_text(encoding="utf-8")
     build_block = html.split("function buildFilters()", 1)[1].split("function filterBuckets", 1)[0]
@@ -249,7 +269,9 @@ def test_dashboard_keeps_compact_legacy_filter_row_and_compatible_filters():
     assert "label: '⚓ Anchor'" in build_block
     assert "label: 'Feel'" in build_block
     assert "label: '日印象'" in build_block
-    assert "label: '⚡ 未解决'" in build_block
+    assert "label: '⚡ 可浮现'" in build_block
+    assert "未解决" not in build_block
+    assert "旧视图" not in build_block
     assert "label: '🌿 已消化'" in build_block
     assert "label: '📦 归档'" in build_block
     assert "旧标签 / legacy domain" not in build_block
