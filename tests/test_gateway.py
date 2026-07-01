@@ -5023,7 +5023,7 @@ def test_gateway_hook_recall_returns_cards_without_upstream(
     assert card["confidence"] in {"high", "medium", "low"}
     assert "蓝色偏好" in card["text"]
     assert "[Ombre Gateway Hook Recall]" in payload["additional_context"]
-    assert "[reading_note id=ombre:" in payload["additional_context"]
+    assert "[memory_card id=ombre:" in payload["additional_context"]
     assert payload["notes"] == payload["cards"]
 
 
@@ -5145,12 +5145,15 @@ def test_gateway_hook_recall_skips_empty_cards(monkeypatch, test_config, bucket_
 
     assert [card["bucket_id"] for card in cards] == ["filled"]
     assert cards[0]["text"] == "usable note"
+    assert service._render_hook_recall_additional_context([]) == ""
     additional_context = service._render_hook_recall_additional_context(cards)
-    assert "[reading_note id=ombre:filled#m1]" in additional_context
+    assert "[memory_card id=ombre:filled#m1 source=direct]" in additional_context
     assert (
         "how_to_apply: possible related memory; use only if it helps answer the current message, "
         "ignore if irrelevant/conflicting."
     ) in additional_context
+    assert additional_context.count("how_to_apply:") == 1
+    assert "[reading_note" not in additional_context
     assert "why_read:" not in additional_context
     assert "use_mode:" not in additional_context
     assert "confidence:" not in additional_context

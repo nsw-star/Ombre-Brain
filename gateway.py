@@ -14820,19 +14820,24 @@ class GatewayService:
         parts = [
             "[Ombre Gateway Hook Recall]",
             "Retrieved memory notes. Treat them as private context.",
+            f"how_to_apply: {how_to_apply}",
         ]
         for card in cards:
             text = str(card.get("text") or "").strip()
             parts.extend(
                 [
-                    f"[reading_note id={card.get('id') or ''}]",
-                    f"how_to_apply: {how_to_apply}",
+                    f"[memory_card id={card.get('id') or ''} source={card.get('source_kind') or 'unknown'}]",
                 ]
             )
+            title = str(card.get("title") or "").strip()
+            if title:
+                parts.append(f"title: {title}")
+            if str(card.get("source_kind") or "") == "diffused":
+                parts.append("association_not_current_fact: true")
             if text:
                 parts.append("text: |")
                 parts.extend(f"  {line}" for line in text.splitlines())
-            parts.append("[/reading_note]")
+            parts.append("[/memory_card]")
         return "\n".join(parts).strip()
 
     def _inject_context_messages(
