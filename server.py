@@ -2435,6 +2435,45 @@ def _bucket_summary_payload(bucket: dict) -> dict:
     }
 
 
+def _metadata_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _bucket_light_payload(bucket: dict) -> dict:
+    meta = bucket.get("metadata", {}) if isinstance(bucket, dict) else {}
+    metadata_view = normalize_memory_metadata(bucket)
+    return {
+        "id": bucket.get("id", ""),
+        "bucket_id": bucket.get("id", ""),
+        "name": meta.get("name", bucket.get("id", "")),
+        "type": meta.get("type", "dynamic"),
+        "domain": meta.get("domain", []),
+        "tags": meta.get("tags", []),
+        "source": meta.get("source", ""),
+        "importance": meta.get("importance", 5),
+        "confidence": meta.get("confidence", 0.5),
+        "created": _metadata_text(meta.get("created")),
+        "updated_at": _metadata_text(meta.get("updated_at")),
+        "last_active": _metadata_text(meta.get("last_active")),
+        "resolved": bool(meta.get("resolved", False)),
+        "digested": bool(meta.get("digested", False)),
+        "pinned": bool(meta.get("pinned", False)),
+        "protected": bool(meta.get("protected", False)),
+        "anchor": bool(meta.get("anchor", False)),
+        "self_anchor": is_self_anchor_bucket(bucket),
+        "metadata_view": metadata_view,
+        **metadata_view,
+    }
+
+
+def _bucket_light_sort_key(item: dict) -> str:
+    return str(item.get("created") or item.get("last_active") or "")
+
+
 def _identity_seed_alias_terms() -> set[str]:
     terms = set()
     try:
@@ -7657,6 +7696,34 @@ async def read_bucket(bucket_id: str) -> dict:
 
 
 # =============================================================
+# Tool 1.55: list_buckets_light — lightweight bucket index
+# 工具 1.55：list_buckets_light — 轻量桶索引
+# =============================================================
+@mcp.tool()
+async def list_buckets_light(
+    include_archive: bool = False,
+    limit: int = 500,
+    offset: int = 0,
+) -> dict:
+    """只读列出桶的轻量元数据；不返回正文，给同步脚本和外部索引用。"""
+    safe_limit = max(1, min(int(limit or 500), 2000))
+    safe_offset = max(0, int(offset or 0))
+    try:
+        all_buckets = await bucket_mgr.list_all(include_archive=include_archive)
+        items = [_bucket_light_payload(bucket) for bucket in all_buckets]
+        items.sort(key=_bucket_light_sort_key, reverse=True)
+        return {
+            "buckets": items[safe_offset : safe_offset + safe_limit],
+            "count": len(items),
+            "include_archive": bool(include_archive),
+            "limit": safe_limit,
+            "offset": safe_offset,
+        }
+    except Exception as e:
+        return {"error": str(e), "buckets": []}
+
+
+# =============================================================
 # Tool 1.6: comment_bucket — add a ring/comment to a memory
 # 工具 1.6：comment_bucket — 给记忆追加年轮
 # =============================================================
@@ -9140,6 +9207,32 @@ async def api_buckets(request):
             })
         result.sort(key=lambda x: x["score"], reverse=True)
         return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@mcp.custom_route("/api/buckets/light", methods=["GET"])
+async def api_buckets_light(request):
+    """List lightweight bucket metadata without content previews."""
+    from starlette.responses import JSONResponse
+    err = _require_dashboard_auth(request)
+    if err:
+        return err
+    try:
+        params = request.query_params
+        include_archive = str(params.get("include_archive") or "").lower() in {"1", "true", "yes", "on"}
+        limit = max(1, min(int(params.get("limit") or 500), 2000))
+        offset = max(0, int(params.get("offset") or 0))
+        all_buckets = await bucket_mgr.list_all(include_archive=include_archive)
+        items = [_bucket_light_payload(bucket) for bucket in all_buckets]
+        items.sort(key=_bucket_light_sort_key, reverse=True)
+        return JSONResponse({
+            "buckets": items[offset : offset + limit],
+            "count": len(items),
+            "include_archive": include_archive,
+            "limit": limit,
+            "offset": offset,
+        })
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
