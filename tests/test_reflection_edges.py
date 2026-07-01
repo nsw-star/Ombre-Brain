@@ -865,6 +865,7 @@ async def test_daily_chat_memory_review_requires_confirmation(test_config):
     assert result["added"] == 1
     assert pending[0]["candidate"]["kind"] == "stable_preference"
     assert "池又雨" in pending[0]["candidate"]["content"]
+    assert "自动记忆" not in pending[0]["candidate"]["title"]
     assert await bucket_mgr.get(candidate_id) is None
 
     confirmed = await engine.confirm_daily_chat_memory([candidate_id], bucket_mgr)
@@ -874,6 +875,7 @@ async def test_daily_chat_memory_review_requires_confirmation(test_config):
     assert bucket is not None
     assert bucket["metadata"]["source"] == "daily_chat_memory"
     assert bucket["metadata"]["source_conversation_turn_ids"] == [7]
+    assert "自动记忆" not in bucket["metadata"]["name"]
 
 
 @pytest.mark.asyncio
@@ -945,7 +947,74 @@ async def test_daily_chat_memory_prefers_full_raw_events_by_date(test_config):
     assert bucket["metadata"]["source"] == "daily_chat_memory"
     assert bucket["metadata"]["source_raw_event_ids"] == [101, 102]
     assert bucket["metadata"]["source_conversation_turn_ids"] == []
-    assert "key_event" in bucket["metadata"]["tags"]
+    assert "project_state" in bucket["metadata"]["tags"]
+    assert "project_event" in bucket["metadata"]["tags"]
+
+
+@pytest.mark.asyncio
+async def test_daily_chat_memory_skips_recall_probe_questions(test_config):
+    cfg = _no_api_config(test_config)
+    cfg["identity"] = {
+        "ai_name": "Haven",
+        "user_name": "Xiaoyu",
+        "user_display_name": "池又雨",
+        "user_aliases": ["小雨"],
+    }
+    cfg["reflection"]["daily_chat_memory_mode"] = "auto"
+    bucket_mgr = BucketManager(cfg)
+    engine = ReflectionEngine(cfg)
+    now = datetime(2026, 7, 1, 23, 59, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    class ConversationTurnStore:
+        def list_conversation_turns_between(self, *, profile_id, start_at, end_at, limit):
+            return [
+                {
+                    "id": 21,
+                    "session_id": "daily-chat",
+                    "round_id": 21,
+                    "created_at": "2026-07-01T20:00:00+08:00",
+                    "user_text": "还是有点问题！不过我想继续测一下，哥哥的笔友都有谁，还记得吗 我试试看想想。",
+                    "assistant_text": "我想想。",
+                    "model": "test",
+                    "client": "gateway",
+                    "route": "/v1/chat/completions",
+                }
+            ]
+
+    class Persona:
+        profile_id = "haven_xiaoyu"
+
+    result = await engine.run_daily_chat_memory(
+        bucket_mgr,
+        conversation_turn_store=ConversationTurnStore(),
+        persona_engine=Persona(),
+        now=now,
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "no_candidates"
+
+
+def test_daily_chat_memory_normalization_rejects_raw_probe_candidate(test_config):
+    cfg = _no_api_config(test_config)
+    engine = ReflectionEngine(cfg)
+
+    candidates = engine._normalize_daily_chat_memory_candidates(
+        "2026-07-01",
+        [
+            {
+                "should_write": True,
+                "kind": "relationship_anchor",
+                "title": "2026-07-01 自动记忆",
+                "content": "我在 2026-07-01 的聊天里记住了这一段关系连续性：还是有点问题！不过我想继续测一下，哥哥的笔友都有谁，还记得吗 我试试看想想。",
+                "confidence": 0.96,
+                "source_turn_ids": [21],
+            }
+        ],
+        [{"id": 21, "raw_event_ids": [101, 102]}],
+    )
+
+    assert candidates == []
 
 
 @pytest.mark.asyncio
