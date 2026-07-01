@@ -135,9 +135,10 @@ DIARY_MEMORY_PROMPT_TEMPLATE = """你是 Ombre-Brain 的日记长期记忆筛选
 
 
 DAILY_CHAT_MEMORY_PROMPT_TEMPLATE = """你是 Ombre-Brain 的每日聊天长期记忆筛选器。
-输入是 {ai_name} 与 {user_display_name} 当天的 Gateway 对话原文。请挑选最多 {max_candidates} 条值得写入长期记忆的候选。
+输入是 {ai_name} 与 {user_display_name} 当天 raw_events 还原的对话原文。请挑选最多 {max_candidates} 条值得写入长期记忆的候选。
 
 只允许写这些类型：
+- key_event：当天发生、以后会按日期回看的关键事件
 - stable_preference：稳定偏好
 - boundary：边界或明确不喜欢的表达
 - signal：暗号、称呼、模式切换信号
@@ -150,14 +151,15 @@ DAILY_CHAT_MEMORY_PROMPT_TEMPLATE = """你是 Ombre-Brain 的每日聊天长期�
   "candidates": [
     {
       "should_write": true,
-      "kind": "stable_preference",
+      "kind": "key_event",
       "title": "短标题",
       "content": "可直接写入长期记忆的一小段正文",
-      "tags": ["communication_preference"],
+      "tags": ["key_event"],
       "importance": 5,
       "valence": 0.55,
       "arousal": 0.3,
       "confidence": 0.72,
+      "source_event_ids": [101, 102],
       "source_turn_ids": [1, 2],
       "reason": "为什么值得以后召回"
     }
@@ -165,8 +167,10 @@ DAILY_CHAT_MEMORY_PROMPT_TEMPLATE = """你是 Ombre-Brain 的每日聊天长期�
 }
 
 规则：
-- 不要写日报，不要总结整天，不要把普通聊天、调情、临时情绪、工具注入、系统上下文写成长期记忆。
-- content 必须只写一个可未来召回的点，60 到 180 字。
+- 不要写日报，不要总结整天；只保留以后会按日期回看、会影响后续行动或关系连续性的关键事件/长期锚点。
+- 不要把普通聊天、调情、临时情绪、工具注入、系统上下文写成长期记忆。
+- content 必须只写一个可未来召回的点，60 到 220 字。
+- 如果原话本身是记忆证据，可以在 content 末尾追加很短的 "### original" 原话片段；不要每条都追加。
 - 不硬编码姓名；如果用户指的是当前用户，写作 {user_display_name}；如果 assistant/AI 指的是当前回应者，写作 {ai_name}。
 - 用户偏好、边界、暗号适合第三人称；{ai_name} 自己的关系锚点可以用第一人称；项目状态用中性第三人称。
 - 只根据原文能证明的内容写，不编造。
@@ -269,10 +273,10 @@ class ReflectionEngine:
         self.diary_memory_extract_max_per_day = max(0, int(cfg.get("diary_memory_extract_max_per_day", 1)))
         self.diary_memory_extract_min_confidence = float(cfg.get("diary_memory_extract_min_confidence", 0.68))
         self.daily_chat_memory_mode = self._normalize_daily_chat_memory_mode(
-            cfg.get("daily_chat_memory_mode", "review")
+            cfg.get("daily_chat_memory_mode", "auto")
         )
         self.daily_chat_memory_hour = max(0, min(23, int(cfg.get("daily_chat_memory_hour", 0))))
-        self.daily_chat_memory_turn_limit = max(0, min(200, int(cfg.get("daily_chat_memory_turn_limit", 80))))
+        self.daily_chat_memory_turn_limit = max(0, min(10000, int(cfg.get("daily_chat_memory_turn_limit", 0))))
         self.daily_chat_memory_max_per_day = max(0, min(10, int(cfg.get("daily_chat_memory_max_per_day", 3))))
         self.daily_chat_memory_min_confidence = float(cfg.get("daily_chat_memory_min_confidence", 0.68))
         state_dir = config.get("state_dir") or os.path.join(
@@ -645,6 +649,7 @@ class ReflectionEngine:
         persona_engine=None,
         embedding_engine=None,
         conversation_turn_store=None,
+        raw_event_store=None,
     ) -> list[dict]:
         if not self.enabled or not self.auto_enabled:
             return []
@@ -656,6 +661,7 @@ class ReflectionEngine:
             chat_result = await self.run_daily_chat_memory(
                 bucket_mgr,
                 conversation_turn_store=conversation_turn_store,
+                raw_event_store=raw_event_store,
                 persona_engine=persona_engine,
                 embedding_engine=embedding_engine,
                 now=chat_target,
@@ -1144,7 +1150,7 @@ class ReflectionEngine:
 
     @staticmethod
     def _conversation_turn_payloads(turns: list[dict] | None, limit: int) -> list[dict]:
-        if limit <= 0 or not turns:
+        if not turns:
             return []
         selected = []
         for turn in turns:
@@ -1166,13 +1172,79 @@ class ReflectionEngine:
                 }
             )
         selected.sort(key=lambda item: str(item.get("created_at") or ""))
-        return selected[-limit:]
+        return selected[-limit:] if limit > 0 else selected
+
+    @staticmethod
+    def _raw_event_turn_payloads(events: list[dict] | None, limit: int) -> list[dict]:
+        if not events:
+            return []
+        grouped: dict[tuple[str, str], dict] = {}
+        for event in events:
+            role = str(event.get("role") or "").strip().lower()
+            if role not in {"user", "assistant"}:
+                continue
+            text = str(event.get("text") or "").strip()
+            if not text:
+                continue
+            metadata = event.get("metadata", {}) if isinstance(event.get("metadata"), dict) else {}
+            session_id = str(event.get("session_id") or event.get("conversation_id") or "").strip()
+            round_value = metadata.get("round_id")
+            round_key = str(round_value).strip() if round_value is not None else ""
+            event_id = int(event.get("id") or 0)
+            key = (session_id, round_key or f"event:{event_id}")
+            row = grouped.get(key)
+            if row is None:
+                row = {
+                    "id": None,
+                    "session_id": session_id,
+                    "round_id": int(round_key) if round_key.isdigit() else None,
+                    "created_at": str(event.get("created_at") or ""),
+                    "user_text": "",
+                    "assistant_text": "",
+                    "model": str(metadata.get("model") or ""),
+                    "client": str(event.get("client") or ""),
+                    "route": str(metadata.get("route") or ""),
+                    "raw_event_ids": [],
+                    "source_event_ids": [],
+                }
+                grouped[key] = row
+            row["raw_event_ids"].append(event_id)
+            source_event_id = str(event.get("source_event_id") or "").strip()
+            if source_event_id:
+                row["source_event_ids"].append(source_event_id)
+            if not row.get("created_at"):
+                row["created_at"] = str(event.get("created_at") or "")
+            if role == "user":
+                row["user_text"] = f"{row['user_text']} / {text}".strip(" /") if row["user_text"] else text
+            else:
+                row["assistant_text"] = (
+                    f"{row['assistant_text']} / {text}".strip(" /")
+                    if row["assistant_text"]
+                    else text
+                )
+
+        selected = []
+        for row in grouped.values():
+            if not row["user_text"] and not row["assistant_text"]:
+                continue
+            row["raw_event_ids"] = list(dict.fromkeys(row["raw_event_ids"]))
+            row["source_event_ids"] = list(dict.fromkeys(row["source_event_ids"]))
+            selected.append(
+                {
+                    **row,
+                    "user_text": row["user_text"][:1200],
+                    "assistant_text": row["assistant_text"][:1200],
+                }
+            )
+        selected.sort(key=lambda item: (str(item.get("created_at") or ""), int(item.get("id") or 0)))
+        return selected[-limit:] if limit > 0 else selected
 
     async def run_daily_chat_memory(
         self,
         bucket_mgr,
         *,
         conversation_turn_store=None,
+        raw_event_store=None,
         persona_engine=None,
         embedding_engine=None,
         key: str = "",
@@ -1190,17 +1262,51 @@ class ReflectionEngine:
         key = now_local.date().isoformat()
         start, end = self._period_window("daily", now_local)
         profile_id = str(getattr(persona_engine, "profile_id", "") or "default")
+        turns = []
+        turn_source = ""
+        if raw_event_store:
+            try:
+                raw_events = raw_event_store.list_events_between(
+                    start_at=start,
+                    end_at=end,
+                    limit=self.daily_chat_memory_turn_limit,
+                )
+            except Exception as exc:
+                logger.warning("Daily chat memory raw event read failed: %s", exc)
+                raw_events = []
+            if raw_events:
+                raw_events = [
+                    event
+                    for event in raw_events
+                    if not (
+                        isinstance(event.get("metadata"), dict)
+                        and event["metadata"].get("profile_id")
+                        and str(event["metadata"].get("profile_id")) != profile_id
+                    )
+                ]
+                turns = self._raw_event_turn_payloads(
+                    raw_events,
+                    limit=self.daily_chat_memory_turn_limit,
+                )
+                if turns:
+                    turn_source = "raw_events"
+
         try:
-            raw_turns = conversation_turn_store.list_conversation_turns_between(
-                profile_id=profile_id,
-                start_at=start,
-                end_at=end,
-                limit=self.daily_chat_memory_turn_limit,
-            )
+            raw_turns = []
+            if not turns and conversation_turn_store:
+                raw_turns = conversation_turn_store.list_conversation_turns_between(
+                    profile_id=profile_id,
+                    start_at=start,
+                    end_at=end,
+                    limit=self.daily_chat_memory_turn_limit or 80,
+                )
         except Exception as exc:
             logger.warning("Daily chat memory turn read failed: %s", exc)
             raw_turns = []
-        turns = self._conversation_turn_payloads(raw_turns, limit=self.daily_chat_memory_turn_limit)
+        if not turns:
+            turns = self._conversation_turn_payloads(raw_turns, limit=self.daily_chat_memory_turn_limit)
+            if turns:
+                turn_source = "conversation_turns"
         if not turns:
             return {"status": "skipped", "reason": "no_conversation_turns", "date": key, "mode": effective_mode}
 
@@ -1222,6 +1328,7 @@ class ReflectionEngine:
                 "date": key,
                 "mode": effective_mode,
                 "turns": len(turns),
+                "turn_source": turn_source,
                 **pending,
             }
 
@@ -1235,6 +1342,7 @@ class ReflectionEngine:
             "date": key,
             "mode": effective_mode,
             "turns": len(turns),
+            "turn_source": turn_source,
             **write_result,
         }
 
@@ -1347,6 +1455,7 @@ class ReflectionEngine:
         if not normalized:
             return []
         keyword_map = [
+            ("key_event", ["第一次", "见面", "纪念", "决定", "完成", "上线", "发布", "迁移", "遇到", "相遇"]),
             ("boundary", ["不喜欢", "不要", "别再", "边界"]),
             ("signal", ["暗号", "称呼", "模式", "信号", "切换"]),
             ("commitment", ["承诺", "约定", "答应", "以后要", "下次要"]),
@@ -1356,6 +1465,12 @@ class ReflectionEngine:
         ]
         candidates = []
         turn_ids = [turn.get("id") for turn in turns if turn.get("id") is not None]
+        raw_event_ids = [
+            event_id
+            for turn in turns
+            for event_id in (turn.get("raw_event_ids") or [])
+            if event_id is not None
+        ]
         for kind, keywords in keyword_map:
             if not any(keyword in normalized for keyword in keywords):
                 continue
@@ -1373,6 +1488,7 @@ class ReflectionEngine:
                     "arousal": 0.3,
                     "confidence": 0.7,
                     "source_turn_ids": turn_ids[:8],
+                    "source_event_ids": raw_event_ids[:24],
                     "reason": f"chat_contains_{kind}",
                 }
             )
@@ -1384,6 +1500,8 @@ class ReflectionEngine:
         user_display_name = self.identity["user_display_name"]
         ai_name = self.identity["ai_name"]
         excerpt = self._trim_diary_memory_content(strip_wikilinks(excerpt))
+        if kind == "key_event":
+            return f"{key} 发生了一件之后可能需要按日期回看的关键事件：{excerpt}"
         if kind == "project_state":
             return f"{key} 的聊天确认了一个仍会影响后续执行的项目状态：{excerpt}"
         if kind == "relationship_anchor":
@@ -1403,6 +1521,12 @@ class ReflectionEngine:
         turns: list[dict],
     ) -> list[dict]:
         fallback_turn_ids = [turn.get("id") for turn in turns if turn.get("id") is not None]
+        fallback_raw_event_ids = [
+            event_id
+            for turn in turns
+            for event_id in (turn.get("raw_event_ids") or [])
+            if event_id is not None
+        ]
         normalized = []
         for candidate in candidates or []:
             if candidate.get("should_write") is False:
@@ -1421,6 +1545,11 @@ class ReflectionEngine:
                 for turn_id in self._string_list(candidate.get("source_turn_ids"), limit=20)
                 if str(turn_id).isdigit()
             ] or [int(turn_id) for turn_id in fallback_turn_ids[:20] if str(turn_id).isdigit()]
+            source_event_ids = [
+                int(event_id)
+                for event_id in self._string_list(candidate.get("source_event_ids"), limit=80)
+                if str(event_id).isdigit()
+            ] or [int(event_id) for event_id in fallback_raw_event_ids[:80] if str(event_id).isdigit()]
             item = {
                 "id": self._daily_chat_memory_candidate_id(key, kind, content),
                 "date": key,
@@ -1443,6 +1572,7 @@ class ReflectionEngine:
                 "arousal": self._clamp(candidate.get("arousal", 0.3)),
                 "confidence": confidence,
                 "source_turn_ids": source_turn_ids,
+                "source_event_ids": source_event_ids,
                 "reason": str(candidate.get("reason") or "").strip()[:160],
             }
             normalized.append(item)
@@ -1491,6 +1621,7 @@ class ReflectionEngine:
                         "from_daily_chat": True,
                         "event_date": key,
                         "source_conversation_turn_ids": candidate.get("source_turn_ids") or [],
+                        "source_raw_event_ids": candidate.get("source_event_ids") or [],
                         "daily_chat_memory_candidate_id": bucket_id,
                         "daily_chat_memory_reason": str(candidate.get("reason") or "")[:160],
                     },
@@ -1912,6 +2043,7 @@ class ReflectionEngine:
     def _normalize_diary_memory_kind(value: Any) -> str:
         kind = str(value or "").strip()
         allowed = {
+            "key_event",
             "stable_preference",
             "boundary",
             "signal",
@@ -1924,6 +2056,8 @@ class ReflectionEngine:
 
     @staticmethod
     def _diary_memory_domain(kind: str) -> list[str]:
+        if kind == "key_event":
+            return ["生活", "记忆"]
         if kind == "project_state":
             return ["项目", "记忆"]
         if kind in {"stable_preference", "boundary", "signal"}:
@@ -1933,6 +2067,7 @@ class ReflectionEngine:
     @staticmethod
     def _kind_tag(kind: str) -> str:
         return {
+            "key_event": "key_event",
             "stable_preference": "communication_preference",
             "boundary": "boundary_setting",
             "signal": "relationship_signal",
@@ -1945,6 +2080,7 @@ class ReflectionEngine:
     @staticmethod
     def _kind_label(kind: str) -> str:
         return {
+            "key_event": "关键事件",
             "stable_preference": "稳定偏好",
             "boundary": "边界",
             "signal": "暗号或模式信号",
@@ -2214,8 +2350,8 @@ class ReflectionEngine:
 
     @staticmethod
     def _normalize_daily_chat_memory_mode(value: Any) -> str:
-        mode = str(value or "review").strip().lower()
-        return mode if mode in DAILY_CHAT_MEMORY_MODES else "review"
+        mode = str(value or "auto").strip().lower()
+        return mode if mode in DAILY_CHAT_MEMORY_MODES else "auto"
 
     @staticmethod
     def _normalize_period(period: str) -> str:

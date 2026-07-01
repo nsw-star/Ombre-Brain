@@ -1805,16 +1805,23 @@
   }
   .reflection-day.empty { visibility: hidden; pointer-events: none; }
   .reflection-day-number { line-height: 1; }
-  .reflection-day-dot {
+  .reflection-day-dots {
     position: absolute;
     left: 50%;
     bottom: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    transform: translateX(-50%);
+  }
+  .reflection-day-dot {
     width: 4px;
     height: 4px;
     border-radius: 999px;
-    transform: translateX(-50%);
     border: 1px solid rgba(255,255,255,0.72);
   }
+  .reflection-day-dot.event { background: #A67C52; }
   .reflection-card .reflection-day.selected .reflection-day-dot {
     background: #F7F2E8 !important;
     border-color: rgba(255,255,255,0.88);
@@ -1863,6 +1870,28 @@
     font-size: 13px;
     line-height: 1.7;
     white-space: pre-wrap;
+  }
+  .reflection-entry-sources {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .reflection-source-chip {
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(255,255,255,0.34);
+    color: var(--text-light);
+    padding: 4px 9px;
+    font-size: 11px;
+    line-height: 1.2;
+    cursor: pointer;
+  }
+  .reflection-source-note {
+    color: var(--text-light);
+    font-size: 11px;
+    line-height: 1.5;
+    width: 100%;
   }
   .reflection-entry-action {
     width: 34px;
@@ -2673,18 +2702,7 @@
     <div class="reflection-toolbar">
       <div class="reflection-title">
         <h2>自动记忆</h2>
-        <p>每天从 Gateway 原文里挑长期记忆候选；review 模式下确认后才写入 bucket。</p>
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <input type="date" id="daily-chat-memory-date" />
-        <select id="daily-chat-memory-run-mode">
-          <option value="">使用配置</option>
-          <option value="review">挑选后确认</option>
-          <option value="auto">自动存</option>
-          <option value="off">关闭</option>
-        </select>
-        <button type="button" onclick="runDailyChatMemory()">立即整理</button>
-        <button type="button" onclick="loadDailyChatMemoryPending()">刷新候选</button>
+        <p>每天本地零点后从原文保险箱里挑长期记忆；默认自动写入，review 模式下在这里确认。</p>
       </div>
     </div>
     <div class="bucket-bulk-message" id="daily-chat-memory-message"></div>
@@ -3077,17 +3095,17 @@
     </div>
 
     <div class="config-section">
-      <h3>记忆关系整理</h3>
+      <h3>关系记忆整理</h3>
       <div class="config-row">
         <label>整理引擎</label>
         <select id="cfg-reflection-enabled"><option value="true">开启</option><option value="false">关闭</option></select>
       </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">总开关；关闭后不再做关系整理、日印象和写入打标</div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">总开关；关闭后此区域的关系整理、日印象、自动记忆都不运行</div>
       <div class="config-row">
         <label>自动整理</label>
         <select id="cfg-reflection-auto"><option value="true">开启</option><option value="false">关闭</option></select>
       </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">关闭后只保留手动触发</div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">后台定时任务；开启后跑零点自动记忆、日印象，并给已有记忆补 tags、affect_anchor、边关系</div>
       <div class="config-row">
         <label>日印象</label>
         <select id="cfg-reflection-daily"><option value="true">开启</option><option value="false">关闭</option></select>
@@ -3106,17 +3124,17 @@
       <div class="config-row">
         <label>自动记忆</label>
         <select id="cfg-reflection-chat-memory-mode">
-          <option value="review">挑选后确认</option>
           <option value="auto">自动存</option>
+          <option value="review">挑选后确认</option>
           <option value="off">关闭</option>
         </select>
       </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 review；零点后从 Gateway 对话原文挑长期记忆候选</div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认自动存；每天本地 0 点后整理前一天原文并写入长期记忆</div>
       <div class="config-row">
         <label>自动记忆轮次</label>
-        <input type="number" id="cfg-reflection-chat-memory-turns" min="0" max="200" />
+        <input type="number" id="cfg-reflection-chat-memory-turns" min="0" max="10000" />
       </div>
-      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 80；只影响自动记忆候选，不影响日印象材料</div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 0；0 表示按日期读取当天全部原文，只影响自动记忆候选</div>
       <div class="config-row">
         <label>普通记忆和弦</label>
         <select id="cfg-reflection-memory-anchor"><option value="true">开启</option><option value="false">关闭</option></select>
@@ -3616,6 +3634,15 @@ function getBucketDate(bucket) {
   return String(bucket.created || '').slice(0, 10);
 }
 
+function getBucketEventDate(bucket) {
+  if (!bucket) return '';
+  if (bucket.date) return String(bucket.date).slice(0, 10);
+  if (bucket.event_date) return String(bucket.event_date).slice(0, 10);
+  var meta = bucketMetadataView(bucket);
+  if (meta.event_date) return String(meta.event_date).slice(0, 10);
+  return '';
+}
+
 function isDailyImpressionBucket(bucket) {
   var tags = (bucket.tags || []).map(function(tag) { return String(tag); });
   return bucket.type === 'feel'
@@ -3669,6 +3696,13 @@ function isSelfAnchorBucket(bucket) {
   return tags.includes('自我') || tags.includes('self_anchor') || tags.includes('first_person_anchor');
 }
 
+function isReflectionEventBucket(bucket) {
+  if (!bucket || isDailyImpressionBucket(bucket) || isSelfAnchorBucket(bucket)) return false;
+  if (bucket.type === 'feel') return false;
+  if (bucket.resolved || bucket.digested) return false;
+  return /^\d{4}-\d{2}-\d{2}$/.test(getBucketEventDate(bucket));
+}
+
 function getDailyImpressions() {
   return allBuckets.filter(function(b) {
     return isDailyImpressionBucket(b);
@@ -3679,6 +3713,22 @@ function getDailyImpressions() {
   }).sort(function(a, b) {
     return String(a.reflection_date).localeCompare(String(b.reflection_date));
   });
+}
+
+function getReflectionEventsByDate() {
+  var byDate = {};
+  allBuckets.filter(isReflectionEventBucket).forEach(function(bucket) {
+    var date = getBucketEventDate(bucket);
+    if (!byDate[date]) byDate[date] = [];
+    byDate[date].push(bucket);
+  });
+  Object.keys(byDate).forEach(function(date) {
+    byDate[date].sort(function(a, b) {
+      return Number(b.importance || 0) - Number(a.importance || 0)
+        || String(a.created || '').localeCompare(String(b.created || ''));
+    });
+  });
+  return byDate;
 }
 
 function shiftReflectionMonth(delta) {
@@ -3718,6 +3768,7 @@ function renderReflectionReview() {
     if (!byDate[bucket.reflection_date]) byDate[bucket.reflection_date] = [];
     byDate[bucket.reflection_date].push(bucket);
   });
+  var eventsByDate = getReflectionEventsByDate();
 
   var year = reflectionCurrentMonth.getFullYear();
   var month = reflectionCurrentMonth.getMonth();
@@ -3732,16 +3783,23 @@ function renderReflectionReview() {
   for (var day = 1; day <= dayCount; day++) {
     var dateStr = formatLocalDate(year, month, day);
     var items = byDate[dateStr] || [];
-    var dot = items.length ? '<span class="reflection-day-dot" style="background:var(--accent)"></span>' : '';
+    var events = eventsByDate[dateStr] || [];
+    var dots = '';
+    if (items.length || events.length) {
+      dots = '<span class="reflection-day-dots">' +
+        (items.length ? '<span class="reflection-day-dot" style="background:var(--accent)"></span>' : '') +
+        (events.length ? '<span class="reflection-day-dot event"></span>' : '') +
+      '</span>';
+    }
     cells.push(
       '<button type="button" class="reflection-day ' + (dateStr === reflectionSelectedDate ? 'selected' : '') + '" onclick="selectReflectionDate(\'' + dateStr + '\')">' +
         '<span class="reflection-day-number">' + day + '</span>' +
-        dot +
+        dots +
       '</button>'
     );
   }
   calendar.innerHTML = cells.join('');
-  renderReflectionDayPanel(byDate[reflectionSelectedDate] || []);
+  renderReflectionDayPanel(byDate[reflectionSelectedDate] || [], eventsByDate[reflectionSelectedDate] || []);
 }
 
 function reflectionEntryMeta(bucket) {
@@ -3760,9 +3818,34 @@ function reflectionEntry(bucket, index) {
       '<h4>' + esc(bucket.name || bucket.id) + '</h4>' +
       '<div class="reflection-entry-meta">' + reflectionEntryMeta(bucket) + '</div>' +
       '<div class="reflection-entry-preview" id="reflection-entry-body-' + index + '" data-bucket-id="' + esc(id) + '">' + esc(bucket.content_preview || '') + '</div>' +
+      '<div class="reflection-entry-sources" id="reflection-entry-sources-' + index + '" data-bucket-id="' + esc(id) + '"></div>' +
     '</div>' +
     '<button type="button" class="reflection-entry-action" onclick="showDetail(\'' + jsString(id) + '\')" aria-label="打开详情" title="打开详情">✎</button>' +
   '</div>';
+}
+
+function reflectionSourceChips(detail) {
+  var meta = detail && detail.metadata ? detail.metadata : {};
+  var sourceIds = Array.isArray(meta.source_bucket_ids) ? meta.source_bucket_ids : [];
+  var rawIds = Array.isArray(meta.source_raw_event_ids) ? meta.source_raw_event_ids : [];
+  var turnIds = Array.isArray(meta.source_conversation_turn_ids) ? meta.source_conversation_turn_ids : [];
+  var chips = [];
+  sourceIds.slice(0, 8).forEach(function(id) {
+    var textId = String(id || '');
+    var source = allBuckets.find(function(bucket) { return String(bucket.id) === textId; });
+    var label = source ? (source.name || source.id) : textId;
+    chips.push(
+      '<button type="button" class="reflection-source-chip" onclick="showDetail(\'' + jsString(textId) + '\')">' +
+      esc(label) +
+      '</button>'
+    );
+  });
+  if (rawIds.length) {
+    chips.push('<span class="reflection-source-note">原文来源 ' + rawIds.slice(0, 12).map(esc).join(', ') + (rawIds.length > 12 ? '…' : '') + '</span>');
+  } else if (turnIds.length) {
+    chips.push('<span class="reflection-source-note">短期轮次 ' + turnIds.slice(0, 12).map(esc).join(', ') + (turnIds.length > 12 ? '…' : '') + '</span>');
+  }
+  return chips.join('');
 }
 
 async function hydrateReflectionEntryContents(impressions) {
@@ -3778,19 +3861,49 @@ async function hydrateReflectionEntryContents(impressions) {
       if (body && body.dataset.bucketId === id) {
         body.textContent = detail.content || bucket.content_preview || '';
       }
+      var sources = document.getElementById('reflection-entry-sources-' + i);
+      if (sources && sources.dataset.bucketId === id) {
+        sources.innerHTML = reflectionSourceChips(detail);
+      }
     } catch (e) {}
   }
 }
 
-function renderReflectionDayPanel(impressions) {
+function reflectionEventMeta(bucket) {
+  var parts = [];
+  if (bucket.source) parts.push(bucket.source);
+  if (bucket.kind) parts.push(bucket.kind);
+  parts.push('重要度 ' + (bucket.importance || 0));
+  return parts.map(function(part) { return '<span>' + esc(part) + '</span>'; }).join('');
+}
+
+function reflectionEventEntry(bucket) {
+  var id = String(bucket.id || '');
+  return '<div class="reflection-entry">' +
+    '<div>' +
+      '<h4>' + esc(bucket.name || bucket.id) + '</h4>' +
+      '<div class="reflection-entry-meta">' + reflectionEventMeta(bucket) + '</div>' +
+      '<div class="reflection-entry-preview">' + esc(bucket.content_preview || '') + '</div>' +
+    '</div>' +
+    '<button type="button" class="reflection-entry-action" onclick="showDetail(\'' + jsString(id) + '\')" aria-label="打开详情" title="打开详情">✎</button>' +
+  '</div>';
+}
+
+function renderReflectionDayPanel(impressions, events) {
   var panel = document.getElementById('reflection-day-panel');
+  events = events || [];
   var impressionBlock = impressions.length
     ? '<div class="reflection-entry-list">' + impressions.map(function(b, i) { return reflectionEntry(b, i); }).join('') + '</div>'
     : '<div class="reflection-empty">这一天没有日印象。</div>';
+  var eventBlock = events.length
+    ? '<div class="reflection-entry-list">' + events.map(reflectionEventEntry).join('') + '</div>'
+    : '<div class="reflection-empty">这一天还没有带日期的记忆事件。</div>';
 
   panel.innerHTML =
     '<div class="reflection-day-heading"><span>日印象</span><span>' + impressions.length + ' 条</span></div>' +
-    impressionBlock;
+    impressionBlock +
+    '<div class="reflection-day-heading" style="margin-top:18px;"><span>当天发生了什么</span><span>' + events.length + ' 条</span></div>' +
+    eventBlock;
   if (impressions.length) hydrateReflectionEntryContents(impressions);
 }
 
@@ -6844,9 +6957,9 @@ async function loadConfig() {
     document.getElementById('cfg-reflection-daily-turns').value =
       (cfg.reflection && cfg.reflection.daily_conversation_turn_limit) ?? 0;
     document.getElementById('cfg-reflection-chat-memory-mode').value =
-      (cfg.reflection && cfg.reflection.daily_chat_memory_mode) || 'review';
+      (cfg.reflection && cfg.reflection.daily_chat_memory_mode) || 'auto';
     document.getElementById('cfg-reflection-chat-memory-turns').value =
-      (cfg.reflection && cfg.reflection.daily_chat_memory_turn_limit) ?? 80;
+      (cfg.reflection && cfg.reflection.daily_chat_memory_turn_limit) ?? 0;
     document.getElementById('cfg-reflection-memory-anchor').value =
       (cfg.reflection && cfg.reflection.memory_affect_anchor_enabled) === false ? 'false' : 'true';
     document.getElementById('cfg-reflection-weather-anchor').value =
@@ -6988,8 +7101,8 @@ async function saveConfig(persist, persistEnv) {
       daily_enabled: document.getElementById('cfg-reflection-daily').value === 'true',
       daily_min_memory_items: numberValue('cfg-reflection-daily-min-memory', 5),
       daily_conversation_turn_limit: numberValue('cfg-reflection-daily-turns', 0),
-      daily_chat_memory_mode: document.getElementById('cfg-reflection-chat-memory-mode').value || 'review',
-      daily_chat_memory_turn_limit: numberValue('cfg-reflection-chat-memory-turns', 80),
+      daily_chat_memory_mode: document.getElementById('cfg-reflection-chat-memory-mode').value || 'auto',
+      daily_chat_memory_turn_limit: numberValue('cfg-reflection-chat-memory-turns', 0),
       memory_affect_anchor_enabled: document.getElementById('cfg-reflection-memory-anchor').value === 'true',
       relationship_weather_affect_anchor_enabled: document.getElementById('cfg-reflection-weather-anchor').value === 'true',
       model: document.getElementById('cfg-reflection-model').value,

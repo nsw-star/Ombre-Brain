@@ -11,44 +11,6 @@
     if (tone) el.classList.add(tone);
   }
 
-  function selectedDailyChatMemoryMode() {
-    var runMode = document.getElementById('daily-chat-memory-run-mode');
-    if (runMode && runMode.value) return runMode.value;
-    var configMode = document.getElementById('cfg-reflection-chat-memory-mode');
-    return configMode && configMode.value ? configMode.value : 'review';
-  }
-
-  function selectedDailyChatMemoryDate() {
-    var input = document.getElementById('daily-chat-memory-date');
-    return input && input.value ? input.value : '';
-  }
-
-  async function runDailyChatMemory() {
-    setDailyChatMemoryMessage('整理中...');
-    try {
-      var body = { mode: selectedDailyChatMemoryMode() };
-      var date = selectedDailyChatMemoryDate();
-      if (date) body.date = date;
-      var res = await authFetch(dailyChatMemoryApiBase() + '/api/daily-chat-memory/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!res) return;
-      var data = await res.json();
-      if (!res.ok) throw new Error(data.error || '整理失败');
-      setDailyChatMemoryMessage(
-        data.status === 'pending'
-          ? '已生成 ' + (data.added || 0) + ' 条待确认候选。'
-          : '整理结果: ' + (data.status || 'ok'),
-        data.status === 'pending' || data.status === 'created' ? 'ok' : ''
-      );
-      loadDailyChatMemoryPending();
-    } catch (e) {
-      setDailyChatMemoryMessage('整理失败: ' + e.message, 'error');
-    }
-  }
-
   async function loadDailyChatMemoryPending() {
     var target = document.getElementById('daily-chat-memory-pending');
     if (!target) return;
@@ -112,7 +74,6 @@
   }
 
   window.setDailyChatMemoryMessage = setDailyChatMemoryMessage;
-  window.runDailyChatMemory = runDailyChatMemory;
   window.loadDailyChatMemoryPending = loadDailyChatMemoryPending;
   window.renderDailyChatMemoryPending = renderDailyChatMemoryPending;
   window.confirmDailyChatMemory = confirmDailyChatMemory;

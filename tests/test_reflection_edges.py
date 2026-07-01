@@ -877,6 +877,128 @@ async def test_daily_chat_memory_review_requires_confirmation(test_config):
 
 
 @pytest.mark.asyncio
+async def test_daily_chat_memory_prefers_full_raw_events_by_date(test_config):
+    cfg = _no_api_config(test_config)
+    cfg["identity"] = {
+        "ai_name": "Haven",
+        "user_name": "Xiaoyu",
+        "user_display_name": "池又雨",
+        "user_aliases": ["小雨"],
+    }
+    cfg["reflection"]["daily_chat_memory_mode"] = "auto"
+    cfg["reflection"]["daily_chat_memory_turn_limit"] = 0
+    bucket_mgr = BucketManager(cfg)
+    engine = ReflectionEngine(cfg)
+    now = datetime(2026, 5, 21, 23, 59, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    class RawEventStore:
+        seen_limit = None
+
+        def list_events_between(self, *, start_at, end_at, limit):
+            self.seen_limit = limit
+            return [
+                {
+                    "id": 101,
+                    "source_event_id": "haven_xiaoyu:daily-chat:1:user",
+                    "role": "user",
+                    "text": "今天完成了自动记忆改全量原文的决定。",
+                    "created_at": "2026-05-21T20:00:00+08:00",
+                    "conversation_id": "daily-chat",
+                    "session_id": "daily-chat",
+                    "client": "gateway",
+                    "metadata": {"profile_id": "haven_xiaoyu", "round_id": 1},
+                },
+                {
+                    "id": 102,
+                    "source_event_id": "haven_xiaoyu:daily-chat:1:assistant",
+                    "role": "assistant",
+                    "text": "记住，按日期读取 raw_events 全量，再挑关键事件。",
+                    "created_at": "2026-05-21T20:00:00+08:00",
+                    "conversation_id": "daily-chat",
+                    "session_id": "daily-chat",
+                    "client": "gateway",
+                    "metadata": {"profile_id": "haven_xiaoyu", "round_id": 1},
+                },
+            ]
+
+    class ConversationTurnStore:
+        def list_conversation_turns_between(self, **kwargs):
+            raise AssertionError("short conversation_turns should not be used when raw_events has material")
+
+    class Persona:
+        profile_id = "haven_xiaoyu"
+
+    raw_store = RawEventStore()
+    result = await engine.run_daily_chat_memory(
+        bucket_mgr,
+        conversation_turn_store=ConversationTurnStore(),
+        raw_event_store=raw_store,
+        persona_engine=Persona(),
+        now=now,
+    )
+
+    assert raw_store.seen_limit == 0
+    assert result["status"] == "created"
+    assert result["turn_source"] == "raw_events"
+    bucket = await bucket_mgr.get(result["results"][0]["id"])
+    assert bucket is not None
+    assert bucket["metadata"]["source"] == "daily_chat_memory"
+    assert bucket["metadata"]["source_raw_event_ids"] == [101, 102]
+    assert bucket["metadata"]["source_conversation_turn_ids"] == []
+    assert "key_event" in bucket["metadata"]["tags"]
+
+
+@pytest.mark.asyncio
+async def test_run_due_daily_chat_memory_defaults_to_auto_after_midnight(test_config, monkeypatch):
+    cfg = _no_api_config(test_config)
+    cfg["identity"] = {
+        "ai_name": "Haven",
+        "user_name": "Xiaoyu",
+        "user_display_name": "池又雨",
+        "user_aliases": ["小雨"],
+    }
+    cfg["reflection"]["auto_enabled"] = True
+    cfg["reflection"]["daily_enabled"] = False
+    bucket_mgr = BucketManager(cfg)
+    engine = ReflectionEngine(cfg)
+    tz = ZoneInfo("Asia/Shanghai")
+    now = datetime(2026, 5, 22, 0, 5, tzinfo=tz)
+    monkeypatch.setattr(engine, "_local_now", lambda now_arg=None: now_arg.astimezone(tz) if now_arg else now)
+
+    class ConversationTurnStore:
+        def list_conversation_turns_between(self, *, profile_id, start_at, end_at, limit):
+            return [
+                {
+                    "id": 8,
+                    "session_id": "daily-chat",
+                    "round_id": 8,
+                    "created_at": "2026-05-21T20:00:00+08:00",
+                    "user_text": "我希望以后解释代码先说风险，再说怎么改。",
+                    "assistant_text": "记住，先讲风险再讲改法。",
+                    "model": "test",
+                    "client": "gateway",
+                    "route": "/v1/chat/completions",
+                }
+            ]
+
+    class Persona:
+        profile_id = "haven_xiaoyu"
+
+    results = await engine.run_due(
+        bucket_mgr,
+        persona_engine=Persona(),
+        conversation_turn_store=ConversationTurnStore(),
+    )
+
+    assert results[0]["status"] == "created"
+    assert results[0]["mode"] == "auto"
+    assert results[0]["date"] == "2026-05-21"
+    bucket = await bucket_mgr.get(results[0]["results"][0]["id"])
+    assert bucket is not None
+    assert bucket["metadata"]["source"] == "daily_chat_memory"
+
+
+@pytest.mark.asyncio
 async def test_reflect_daily_extracts_diary_memory_when_no_ordinary_memory(test_config, monkeypatch):
     cfg = _no_api_config(test_config)
     bucket_mgr = BucketManager(cfg)

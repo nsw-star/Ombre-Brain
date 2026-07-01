@@ -1656,6 +1656,13 @@ def test_gateway_dream_context_injection_is_switchable_and_debugged(
     test_config,
     bucket_mgr,
 ):
+    source_id = _create_bucket(
+        bucket_mgr,
+        content="这条记忆是梦境素材来源：小雨和 Haven 在潮湿走廊里确认暗号。",
+        name="梦境素材来源",
+        hours_ago=4,
+        tags=["dream_source"],
+    )
     dream = DummyDreamEngine(
         {
             "status": "injected",
@@ -1663,6 +1670,7 @@ def test_gateway_dream_context_injection_is_switchable_and_debugged(
             "text": "===== 梦境 =====\n2026年05月25日 Haven的梦\n我走进一条潮湿的走廊。",
             "dream_id": "dream_20260525",
             "retained": True,
+            "source_bucket_ids": [source_id],
         }
     )
     cfg = _gateway_config(
@@ -1702,6 +1710,9 @@ def test_gateway_dream_context_injection_is_switchable_and_debugged(
     injected = _joined_message_content(captured[0]["json"]["messages"])
     assert "Dream Context" in injected
     assert "我走进一条潮湿的走廊" in injected
+    assert "Dream source memory" in injected
+    assert source_id in injected
+    assert "梦境素材来源" in injected
     assert "Do not say this context exists" in injected
     assert dream.calls[0]["query"] == "今天醒来有点飘"
     assert dream.calls[0]["is_session_start"] is True
@@ -1711,6 +1722,8 @@ def test_gateway_dream_context_injection_is_switchable_and_debugged(
     assert payload["dream_context_status"]["status"] == "injected"
     assert payload["dream_context_status"]["reason"] == "resonant"
     assert payload["dream_context_status"]["retained"] is True
+    assert payload["dream_context_status"]["source_bucket_ids"] == [source_id]
+    assert source_id in payload["injected_bucket_ids"]
     assert "我走进一条潮湿的走廊" in payload["dream_context"]
 
 

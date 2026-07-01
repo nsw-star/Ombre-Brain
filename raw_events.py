@@ -248,23 +248,38 @@ class RawEventStore:
         conversation_id: str = "",
         session_id: str = "",
     ) -> list[dict[str, Any]]:
-        safe_limit = max(1, min(200, int(limit or 40)))
+        try:
+            raw_limit = int(limit)
+        except (TypeError, ValueError):
+            raw_limit = 40
+        safe_limit = max(0, min(10000, raw_limit))
         filters, params = self._search_filters(
             source=source,
             conversation_id=conversation_id,
             session_id=session_id,
         )
         conn = self._connect()
-        rows = conn.execute(
-            f"""
-            SELECT e.*
-            FROM raw_events e
-            WHERE 1 = 1 {filters}
-            ORDER BY e.id DESC
-            LIMIT ?
-            """,
-            [*params, max(safe_limit, 500)],
-        ).fetchall()
+        if safe_limit > 0:
+            rows = conn.execute(
+                f"""
+                SELECT e.*
+                FROM raw_events e
+                WHERE 1 = 1 {filters}
+                ORDER BY e.id DESC
+                LIMIT ?
+                """,
+                [*params, max(safe_limit, 500)],
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"""
+                SELECT e.*
+                FROM raw_events e
+                WHERE 1 = 1 {filters}
+                ORDER BY e.id DESC
+                """,
+                params,
+            ).fetchall()
         conn.close()
 
         compare_tz = start_at.tzinfo or end_at.tzinfo
@@ -302,7 +317,7 @@ class RawEventStore:
             if created is None or not (start <= created < end):
                 continue
             selected.append(self._row_to_event(row))
-            if len(selected) >= safe_limit:
+            if safe_limit > 0 and len(selected) >= safe_limit:
                 break
         return selected
 

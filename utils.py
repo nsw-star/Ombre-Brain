@@ -399,6 +399,10 @@ def load_config(config_path: str = None) -> dict:
             "diary_memory_extract_enabled": True,
             "diary_memory_extract_max_per_day": 1,
             "diary_memory_extract_min_confidence": 0.68,
+            "daily_chat_memory_mode": "auto",
+            "daily_chat_memory_hour": 0,
+            "daily_chat_memory_turn_limit": 0,
+            "daily_chat_memory_max_per_day": 3,
         },
         "portrait": {
             "enabled": True,

@@ -31,6 +31,10 @@ def test_load_config_defaults_relationship_weather_off(tmp_path):
     assert config["reflection"]["daily_enabled"] is True
     assert config["reflection"]["daily_min_memory_items"] == 5
     assert config["reflection"]["daily_conversation_turn_limit"] == 0
+    assert config["reflection"]["daily_chat_memory_mode"] == "auto"
+    assert config["reflection"]["daily_chat_memory_hour"] == 0
+    assert config["reflection"]["daily_chat_memory_turn_limit"] == 0
+    assert config["reflection"]["daily_chat_memory_max_per_day"] == 3
     assert config["reflection"]["memory_affect_anchor_enabled"] is True
     assert config["reflection"]["relationship_weather_affect_anchor_enabled"] is True
     assert config["portrait"]["enabled"] is True

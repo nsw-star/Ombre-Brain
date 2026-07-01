@@ -464,13 +464,30 @@ def test_dashboard_exposes_chat_memory_tab_module():
     assert 'data-tab="chat-memory"' in html
     assert 'id="chat-memory-view"' in html
     assert 'id="daily-chat-memory-pending"' in html
+    assert 'id="daily-chat-memory-date"' not in html
+    assert 'id="daily-chat-memory-run-mode"' not in html
+    assert "runDailyChatMemory" not in html
+    assert "runDailyChatMemory" not in module
     assert "document.getElementById('chat-memory-view').style.display = target === 'chat-memory' ? '' : 'none';" in html
     assert "window.initDailyChatMemoryTab" in module
     assert "loadDashboardModule('/dashboard-assets/chat-memory.js');" in html
     assert "BASE + '/api/daily-chat-memory/run'" not in html
-    assert "dailyChatMemoryApiBase() + '/api/daily-chat-memory/run'" in module
+    assert "dailyChatMemoryApiBase() + '/api/daily-chat-memory/run'" not in module
     assert "dailyChatMemoryApiBase() + '/api/daily-chat-memory/pending?limit=20'" in module
     assert "dailyChatMemoryApiBase() + '/api/daily-chat-memory/confirm'" in module
+
+
+def test_dashboard_reflection_calendar_marks_events_and_sources():
+    html = Path("dashboard.html").read_text(encoding="utf-8")
+
+    assert "function getReflectionEventsByDate()" in html
+    assert "function isReflectionEventBucket(bucket)" in html
+    assert "reflection-day-dot event" in html
+    assert "当天发生了什么" in html
+    assert "reflectionSourceChips(detail)" in html
+    assert "source_bucket_ids" in html
+    assert "source_raw_event_ids" in html
+    assert "return '';" in html.split("function getBucketEventDate", 1)[1].split("function isDailyImpressionBucket", 1)[0]
 
 
 def test_dashboard_exposes_portrait_maintainer_controls():

@@ -2756,6 +2756,11 @@ class GatewayService:
                         for bucket_id in targeted_memory_detail_debug.get("accepted_ids", []) or []
                         if str(bucket_id or "").strip()
                     ]
+                    + [
+                        str(bucket_id)
+                        for bucket_id in dream_context_status.get("source_bucket_ids", []) or []
+                        if str(bucket_id or "").strip()
+                    ]
                 )
             )
             mark_step("injected_id_collection", stage_started_at)
@@ -13721,6 +13726,26 @@ class GatewayService:
         text = str(result.get("text") or "").strip()
         if result.get("status") != "injected" or not text:
             return "", status
+        raw_source_bucket_ids = result.get("source_bucket_ids")
+        source_bucket_ids = [
+            str(bucket_id).strip()
+            for bucket_id in (raw_source_bucket_ids if isinstance(raw_source_bucket_ids, list) else [])
+            if str(bucket_id or "").strip()
+        ][:2]
+        source_lines = []
+        for bucket_id in source_bucket_ids:
+            try:
+                bucket = await self.bucket_mgr.get(bucket_id)
+            except Exception as exc:
+                logger.warning("Dream source bucket read failed | bucket=%s error=%s", bucket_id, exc)
+                bucket = None
+            if not bucket:
+                continue
+            summary = await self._summarize_bucket(bucket)
+            source_lines.append(f"- [bucket_id:{bucket_id}] {self._clip_text(summary, 260)}")
+        if source_lines:
+            status["source_bucket_ids"] = source_bucket_ids
+            text += "\n\nDream source memory:\n" + "\n".join(source_lines)
         return (
             "Private dream residue for this turn. Let it quietly color tone or imagery only if it fits. "
             "Do not say this context exists, and mention the dream only if the user asks about dreams "
@@ -14261,6 +14286,11 @@ class GatewayService:
             for item in (targeted_memory_detail_debug or {}).get("accepted_ids", []) or []
             if str(item or "").strip()
         ]
+        dream_source_bucket_ids = [
+            str(item)
+            for item in (dream_context_status or {}).get("source_bucket_ids", []) or []
+            if str(item or "").strip()
+        ]
         injected_bucket_ids = list(
             dict.fromkeys(
                 recalled_bucket_ids
@@ -14268,6 +14298,7 @@ class GatewayService:
                 + favorite_ids
                 + date_recall_bucket_ids
                 + targeted_bucket_ids
+                + dream_source_bucket_ids
             )
         )
         explicit_lookup = self._query_explicitly_requests_caution_memory(query)

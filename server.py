@@ -2379,6 +2379,7 @@ def _bucket_read_payload(bucket: dict) -> dict:
         "confidence",
         "period",
         "date",
+        "event_date",
         "created",
         "updated_at",
         "last_active",
@@ -2390,6 +2391,10 @@ def _bucket_read_payload(bucket: dict) -> dict:
         "predicate",
         "object",
         "evidence",
+        "source_bucket_ids",
+        "source_persona_event_ids",
+        "source_conversation_turn_ids",
+        "source_raw_event_ids",
         "active",
         "deprecated",
     ]
@@ -9108,6 +9113,7 @@ async def api_buckets(request):
                 "tags": meta.get("tags", []),
                 "metadata_view": metadata_view,
                 **metadata_view,
+                "source": meta.get("source", ""),
                 "valence": meta.get("valence", 0.5),
                 "arousal": meta.get("arousal", 0.3),
                 "model_valence": meta.get("model_valence"),
@@ -9124,6 +9130,7 @@ async def api_buckets(request):
                 "memory_layer": meta.get("memory_layer", ""),
                 "period": meta.get("period"),
                 "date": meta.get("date"),
+                "event_date": meta.get("event_date"),
                 "created": meta.get("created", ""),
                 "last_active": meta.get("last_active", ""),
                 "activation_count": meta.get("activation_count", 0),
@@ -10454,6 +10461,7 @@ async def api_daily_chat_memory_run(request):
         result = await reflection_engine.run_daily_chat_memory(
             bucket_mgr,
             conversation_turn_store=gateway_state_store,
+            raw_event_store=raw_event_store,
             persona_engine=persona_engine,
             embedding_engine=embedding_engine,
             key=str(body.get("date") or ""),
@@ -10768,9 +10776,9 @@ async def api_config_get(request):
             "daily_chat_memory_mode": str(
                 reflection_cfg.get(
                     "daily_chat_memory_mode",
-                    getattr(reflection_engine, "daily_chat_memory_mode", "review"),
+                    getattr(reflection_engine, "daily_chat_memory_mode", "auto"),
                 )
-                or "review"
+                or "auto"
             ),
             "daily_chat_memory_hour": int(
                 reflection_cfg.get(
@@ -10781,7 +10789,7 @@ async def api_config_get(request):
             "daily_chat_memory_turn_limit": int(
                 reflection_cfg.get(
                     "daily_chat_memory_turn_limit",
-                    getattr(reflection_engine, "daily_chat_memory_turn_limit", 80),
+                    getattr(reflection_engine, "daily_chat_memory_turn_limit", 0),
                 )
             ),
             "daily_chat_memory_max_per_day": int(
@@ -11261,9 +11269,9 @@ async def api_config_update(request):
             )
             updated.append("reflection.daily_conversation_turn_limit")
         if "daily_chat_memory_mode" in r:
-            mode = str(r.get("daily_chat_memory_mode") or "review").strip().lower()
+            mode = str(r.get("daily_chat_memory_mode") or "auto").strip().lower()
             if mode not in {"auto", "review", "off"}:
-                mode = "review"
+                mode = "auto"
             reflection_cfg["daily_chat_memory_mode"] = mode
             updated.append("reflection.daily_chat_memory_mode")
         if "daily_chat_memory_hour" in r:
@@ -11277,9 +11285,9 @@ async def api_config_update(request):
         if "daily_chat_memory_turn_limit" in r:
             reflection_cfg["daily_chat_memory_turn_limit"] = _int_between(
                 r.get("daily_chat_memory_turn_limit"),
-                80,
                 0,
-                200,
+                0,
+                10000,
             )
             updated.append("reflection.daily_chat_memory_turn_limit")
         if "daily_chat_memory_max_per_day" in r:
@@ -11666,8 +11674,8 @@ async def api_config_update(request):
                         80,
                     )
                 if "daily_chat_memory_mode" in body["reflection"]:
-                    mode = str(body["reflection"].get("daily_chat_memory_mode") or "review").strip().lower()
-                    sc_reflection["daily_chat_memory_mode"] = mode if mode in {"auto", "review", "off"} else "review"
+                    mode = str(body["reflection"].get("daily_chat_memory_mode") or "auto").strip().lower()
+                    sc_reflection["daily_chat_memory_mode"] = mode if mode in {"auto", "review", "off"} else "auto"
                 if "daily_chat_memory_hour" in body["reflection"]:
                     sc_reflection["daily_chat_memory_hour"] = _int_between(
                         body["reflection"].get("daily_chat_memory_hour"),
@@ -11678,9 +11686,9 @@ async def api_config_update(request):
                 if "daily_chat_memory_turn_limit" in body["reflection"]:
                     sc_reflection["daily_chat_memory_turn_limit"] = _int_between(
                         body["reflection"].get("daily_chat_memory_turn_limit"),
-                        80,
                         0,
-                        200,
+                        0,
+                        10000,
                     )
                 if "daily_chat_memory_max_per_day" in body["reflection"]:
                     sc_reflection["daily_chat_memory_max_per_day"] = _int_between(
@@ -12052,6 +12060,15 @@ if __name__ == "__main__":
             while True:
                 try:
                     reflection_cfg = config.get("reflection", {}) if isinstance(config.get("reflection", {}), dict) else {}
+                    local_reflection_engine.enabled = bool(
+                        reflection_cfg.get("enabled", True)
+                    )
+                    local_reflection_engine.auto_enabled = bool(
+                        reflection_cfg.get("auto_enabled", True)
+                    )
+                    if not local_reflection_engine.enabled or not local_reflection_engine.auto_enabled:
+                        await asyncio.sleep(local_reflection_engine.check_interval_minutes * 60)
+                        continue
                     local_reflection_engine.daily_enabled = bool(
                         reflection_cfg.get("daily_enabled", True)
                     )
@@ -12073,9 +12090,9 @@ if __name__ == "__main__":
                         0,
                         80,
                     )
-                    mode = str(reflection_cfg.get("daily_chat_memory_mode") or "review").strip().lower()
+                    mode = str(reflection_cfg.get("daily_chat_memory_mode") or "auto").strip().lower()
                     local_reflection_engine.daily_chat_memory_mode = (
-                        mode if mode in {"auto", "review", "off"} else "review"
+                        mode if mode in {"auto", "review", "off"} else "auto"
                     )
                     local_reflection_engine.daily_chat_memory_hour = _int_between(
                         reflection_cfg.get("daily_chat_memory_hour"),
@@ -12085,9 +12102,9 @@ if __name__ == "__main__":
                     )
                     local_reflection_engine.daily_chat_memory_turn_limit = _int_between(
                         reflection_cfg.get("daily_chat_memory_turn_limit"),
-                        80,
                         0,
-                        200,
+                        0,
+                        10000,
                     )
                     local_reflection_engine.daily_chat_memory_max_per_day = _int_between(
                         reflection_cfg.get("daily_chat_memory_max_per_day"),
@@ -12100,6 +12117,7 @@ if __name__ == "__main__":
                         local_persona_engine,
                         local_embedding_engine,
                         local_gateway_state_store,
+                        raw_event_store,
                     )
                     if results:
                         logger.info("Reflection run-due results / 反思定时结果: %s", results)
