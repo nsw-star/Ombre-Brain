@@ -539,6 +539,12 @@ def test_dashboard_exposes_chat_memory_tab_module():
     assert "dailyChatMemoryApiBase() + '/api/daily-chat-memory/confirm'" in module
 
 
+def test_dockerfile_copies_dashboard_assets():
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+
+    assert "COPY dashboard_assets ./dashboard_assets" in dockerfile
+
+
 def test_dashboard_reflection_calendar_marks_events_and_sources():
     html = Path("dashboard.html").read_text(encoding="utf-8")
 
