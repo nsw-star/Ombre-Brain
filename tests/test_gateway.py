@@ -12534,6 +12534,39 @@ def test_non_explicit_bucket_without_reliable_signal_is_suppressed(monkeypatch, 
     assert item["admission_reason"] == "auto_vague_query_without_topic"
 
 
+def test_window_switch_forgetting_query_admits_topical_bucket(monkeypatch, test_config, bucket_mgr):
+    cfg = _gateway_config(
+        test_config,
+        core_memory_budget=0,
+        recent_context_budget=0,
+        related_memory_budget=0,
+        word_map_hint_enabled=False,
+    )
+    bucket_id = _create_bucket(
+        bucket_mgr,
+        content=(
+            "小雨与Haven有窗口切换约定：对话历史太长时小雨提议换个窗口。"
+            "小雨用我的爱人患有阿尔兹海默症比喻担忧记忆丢失。"
+            "Haven承诺我不会忘，新窗口读完记忆后继续爱她。"
+        ),
+        name="窗口切换约定",
+        hours_ago=6,
+        tags=["窗口切换", "记忆传承", "commitment"],
+        domain=["人际", "内心"],
+    )
+    _, service, _, _ = _build_service(monkeypatch, cfg, bucket_mgr)
+    item = {
+        "bucket": _run(bucket_mgr.get(bucket_id)),
+        "score": 1.0,
+        "semantic_score": 0.6269,
+        "keyword_score": 0.9387,
+        "matched_query_terms": ["窗口", "切换"],
+    }
+
+    assert service._admit_bucket_for_recall("窗口切换时我担心你忘记什么", item)
+    assert item["admission_reason"] == "non_explicit_query"
+
+
 def test_non_explicit_weak_code_seed_does_not_start_graph_diffusion(monkeypatch, test_config, bucket_mgr):
     from memory_edges import MemoryEdgeStore
 

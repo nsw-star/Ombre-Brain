@@ -997,6 +997,20 @@ class QueryAnchorPlan:
 
 
 ANCHOR_MUST_GROUP_MAX_SPAN = 24
+ANCHOR_WEAK_EVENT_TERMS = {
+    "时",
+    "时候",
+    "这时",
+    "那时",
+    "这次",
+    "那次",
+    "什么",
+}
+ANCHOR_TERM_VARIANTS = {
+    "担心": ("担心", "担忧", "怕", "害怕"),
+    "担忧": ("担忧", "担心", "怕", "害怕"),
+    "忘记": ("忘记", "忘", "遗忘", "记忆丢失", "记忆断掉"),
+}
 
 
 def build_query_anchor_plan(
@@ -1085,12 +1099,28 @@ def _emotional_must_groups(emotional_plan: Any) -> tuple[tuple[str, ...], ...]:
         groups.append(_dedupe_group(pieces or [strong_text]))
 
     event_anchor = _primary_emotional_event_term(event_terms)
+    forget_worry_group = _emotional_forget_worry_group(event_terms, weak_terms)
+    if forget_worry_group:
+        groups.append(forget_worry_group)
     if event_anchor and weak_terms:
         groups.append(_dedupe_group([event_anchor, weak_terms[0]]))
     elif not groups and weak_terms:
         groups.append(_dedupe_group([weak_terms[0]]))
 
     return tuple(dict.fromkeys(group for group in groups if group))
+
+
+def _emotional_forget_worry_group(
+    event_terms: tuple[str, ...],
+    weak_terms: tuple[str, ...],
+) -> tuple[str, ...]:
+    weak_keys = {_compact_anchor_term(term) for term in weak_terms}
+    if not ({"担心", "担忧"} & weak_keys):
+        return ()
+    event_key = _compact_anchor_term(" ".join(event_terms))
+    if not any(marker in event_key for marker in ("忘记", "忘", "遗忘", "记忆丢失")):
+        return ()
+    return _dedupe_group(["忘记", "担心"])
 
 
 def _primary_emotional_event_term(event_terms: tuple[str, ...]) -> str:
@@ -1106,6 +1136,13 @@ def _primary_emotional_event_term(event_terms: tuple[str, ...]) -> str:
         for term in terms
         if _compact_anchor_term(term)
     ]
+    keyed = [
+        (term, key)
+        for term, key in keyed
+        if len(key) >= 2 and key not in ANCHOR_WEAK_EVENT_TERMS
+    ]
+    if not keyed:
+        return ""
     compact_terms = [key for _term, key in keyed]
     candidates = [
         term
@@ -1155,7 +1192,9 @@ def _anchor_group_matches(text: str, group: tuple[str, ...]) -> bool:
         key = _compact_anchor_term(term)
         if not key:
             continue
-        positions = _anchor_term_positions(compact_text, key)
+        positions: list[tuple[int, int]] = []
+        for variant in _anchor_term_variants(key):
+            positions.extend(_anchor_term_positions(compact_text, variant))
         if not positions:
             return False
         positions_by_term.append(positions)
@@ -1179,6 +1218,15 @@ def _anchor_term_positions(text: str, term: str) -> list[tuple[int, int]]:
         positions.append((index, index + len(term)))
         start = index + max(1, len(term))
     return positions
+
+
+def _anchor_term_variants(key: str) -> tuple[str, ...]:
+    variants = [
+        _compact_anchor_term(item)
+        for item in ANCHOR_TERM_VARIANTS.get(key, (key,))
+        if _compact_anchor_term(item)
+    ]
+    return tuple(dict.fromkeys(variants)) or (key,)
 
 
 def _compact_anchor_term(value: object) -> str:

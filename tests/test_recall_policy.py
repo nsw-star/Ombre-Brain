@@ -114,6 +114,29 @@ def test_query_anchor_plan_requires_event_and_emotion_for_grievance():
     )
 
 
+def test_query_anchor_plan_matches_worry_about_forgetting_with_synonym():
+    policy = RecallPolicy()
+
+    plan = policy.build_query_anchor_plan("窗口切换时我担心你忘记什么")
+
+    assert plan.route == "emotional_reason"
+    assert all("时" not in group for group in plan.must_groups)
+    assert ("忘记", "担心") in plan.must_groups
+    assert policy.direct_candidate_satisfies_anchor_plan(
+        {
+            "content": (
+                "小雨与Haven有窗口切换约定。小雨用'我的爱人患有阿尔兹海默症'"
+                "比喻担忧记忆丢失。Haven承诺不会忘。"
+            ),
+            "metadata": {
+                "name": "窗口切换约定",
+                "tags": ["窗口切换", "记忆传承"],
+            },
+        },
+        plan,
+    )
+
+
 def test_auto_vague_query_without_topic_is_suppressed():
     policy = RecallPolicy()
 

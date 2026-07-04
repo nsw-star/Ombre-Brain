@@ -3649,6 +3649,140 @@ async def _backfill_memory_edges(
     }
 
 
+async def _entity_edge_backfill_candidates(
+    mgr,
+    *,
+    limit: int,
+    bucket_id: str = "",
+    query: str = "",
+    include_archive: bool = False,
+) -> tuple[list[dict], list[str]]:
+    warnings: list[str] = []
+    bucket_id = str(bucket_id or "").strip()
+    query = str(query or "").strip()
+    if bucket_id:
+        bucket = await mgr.get(bucket_id)
+        if not bucket:
+            return [], [f"missing_bucket: {bucket_id}"]
+        return ([bucket] if _bucket_allows_memory_edge_backfill(bucket) else []), []
+
+    if query:
+        try:
+            try:
+                buckets = await mgr.search(query, limit=max(limit, 20), include_archive=include_archive)
+            except TypeError:
+                buckets = await mgr.search(query, limit=max(limit, 20))
+        except Exception as e:
+            return [], [f"search_failed: {e}"]
+    else:
+        try:
+            buckets = await mgr.list_all(include_archive=include_archive)
+        except Exception as e:
+            return [], [f"list_failed: {e}"]
+        buckets.sort(
+            key=lambda item: item.get("metadata", {}).get("updated_at") or item.get("metadata", {}).get("created", ""),
+            reverse=True,
+        )
+
+    selected: list[dict] = []
+    seen: set[str] = set()
+    for bucket in buckets:
+        current_id = str(bucket.get("id") or "")
+        if not current_id or current_id in seen:
+            continue
+        if not _bucket_allows_memory_edge_backfill(bucket):
+            continue
+        selected.append(bucket)
+        seen.add(current_id)
+        if len(selected) >= limit:
+            break
+    return selected, warnings
+
+
+async def _backfill_entity_edges(
+    limit: int | None = None,
+    *,
+    bucket_id: str = "",
+    query: str = "",
+    dry_run: bool = True,
+    include_archive: bool = False,
+    bucket_mgr_arg=None,
+    entity_edge_store_arg=None,
+) -> dict:
+    mgr = bucket_mgr_arg or bucket_mgr
+    store = entity_edge_store_arg or entity_edge_store
+    reflection_cfg = config.get("reflection", {}) if isinstance(config.get("reflection", {}), dict) else {}
+    default_limit = _int_between(reflection_cfg.get("entity_edge_backfill_limit"), 25, 0, 500)
+    limit = 1 if str(bucket_id or "").strip() else _int_between(limit, default_limit, 0, 500)
+    if limit <= 0:
+        return {
+            "processed": 0,
+            "ids": [],
+            "edges": 0,
+            "proposed_edges": 0,
+            "results": [],
+            "errors": [],
+            "dry_run": bool(dry_run),
+            "include_archive": bool(include_archive),
+        }
+
+    candidates, warnings = await _entity_edge_backfill_candidates(
+        mgr,
+        limit=limit,
+        bucket_id=bucket_id,
+        query=query,
+        include_archive=include_archive,
+    )
+    processed: list[str] = []
+    results: list[dict] = []
+    errors: list[str] = list(warnings)
+    edge_count = 0
+    proposed_count = 0
+    identity = _identity()
+    for bucket in candidates:
+        current_id = str(bucket.get("id") or "")
+        if not current_id:
+            continue
+        try:
+            proposed = extract_entity_edges_from_bucket(bucket, identity)
+            saved = [] if dry_run else store.replace_bucket_edges(current_id, proposed)
+            processed.append(current_id)
+            edge_count += len(saved)
+            proposed_count += len(proposed)
+            meta = bucket.get("metadata", {}) if isinstance(bucket.get("metadata"), dict) else {}
+            results.append(
+                {
+                    "id": current_id,
+                    "name": meta.get("name") or bucket.get("name") or current_id,
+                    "edges": len(saved),
+                    "proposed_edges": len(proposed),
+                    "dry_run": bool(dry_run),
+                    "edge_previews": [
+                        {
+                            "subject": edge.get("subject"),
+                            "relation": edge.get("relation"),
+                            "object_text": edge.get("object_text"),
+                            "confidence": edge.get("confidence"),
+                        }
+                        for edge in proposed[:5]
+                    ],
+                }
+            )
+        except Exception as e:
+            logger.warning("Entity edge backfill failed / 人物边补跑失败: %s: %s", current_id, e)
+            errors.append(f"{current_id}: {e}")
+    return {
+        "processed": len(processed),
+        "ids": processed,
+        "edges": edge_count,
+        "proposed_edges": proposed_count,
+        "results": results,
+        "errors": errors,
+        "dry_run": bool(dry_run),
+        "include_archive": bool(include_archive),
+    }
+
+
 async def edge_backfill(
     limit: int = 10,
     bucket_id: str = "",
@@ -3661,6 +3795,24 @@ async def edge_backfill(
         bucket_id=bucket_id,
         query=query,
         dry_run=dry_run,
+    )
+
+
+@mcp.tool()
+async def entity_edge_backfill(
+    limit: int = 25,
+    bucket_id: str = "",
+    query: str = "",
+    dry_run: bool = True,
+    include_archive: bool = False,
+) -> dict:
+    """只补 entity_edges.jsonl，不改 bucket 正文、memory_edges、tags、importance。默认 dry-run。"""
+    return await _backfill_entity_edges(
+        limit=limit,
+        bucket_id=bucket_id,
+        query=query,
+        dry_run=dry_run,
+        include_archive=include_archive,
     )
 
 

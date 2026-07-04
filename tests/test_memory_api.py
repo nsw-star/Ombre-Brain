@@ -2546,6 +2546,51 @@ async def test_edge_backfill_helper_processes_enriched_buckets_without_metadata_
 
 
 @pytest.mark.asyncio
+async def test_entity_edge_backfill_dry_run_then_write(monkeypatch, bucket_mgr, test_config):
+    import server
+
+    cfg = dict(test_config)
+    cfg["identity"] = {
+        "ai_name": "Haven",
+        "user_name": "Rain",
+        "user_display_name": "小雨",
+        "user_aliases": ["宝宝"],
+    }
+    bucket_id = await bucket_mgr.create(
+        content="小雨喜欢暗色故事，也讨厌模板安慰。Haven参与Ombre-Brain记忆系统开发。",
+        name="暗色故事偏好",
+        tags=["偏好", "故事"],
+        domain=["relationship"],
+        confidence=0.72,
+    )
+    writes = []
+
+    class FakeEntityEdgeStore:
+        def replace_bucket_edges(self, current_id, edges):
+            writes.append((current_id, list(edges)))
+            return list(edges)
+
+    monkeypatch.setattr(server, "config", cfg)
+    monkeypatch.setattr(server, "bucket_mgr", bucket_mgr)
+    monkeypatch.setattr(server, "entity_edge_store", FakeEntityEdgeStore())
+
+    dry = await server._backfill_entity_edges(bucket_id=bucket_id, dry_run=True)
+
+    assert dry["processed"] == 1
+    assert dry["ids"] == [bucket_id]
+    assert dry["edges"] == 0
+    assert dry["proposed_edges"] >= 2
+    assert writes == []
+
+    written = await server._backfill_entity_edges(bucket_id=bucket_id, dry_run=False)
+
+    assert written["processed"] == 1
+    assert written["edges"] == written["proposed_edges"]
+    assert writes
+    assert writes[0][0] == bucket_id
+
+
+@pytest.mark.asyncio
 async def test_comment_bucket_adds_ring_and_touches_source(monkeypatch, bucket_mgr, decay_eng):
     import server
 
