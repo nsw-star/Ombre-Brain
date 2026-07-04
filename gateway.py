@@ -8295,6 +8295,12 @@ class GatewayService:
                 for item in payload.get("recalled_moment_debug") or []
                 if isinstance(item, dict) and str(item.get("bucket_id") or "").strip()
             ]
+            if not recalled_rows:
+                recalled_rows = [
+                    item
+                    for item in payload.get("recalled_bucket_debug") or []
+                    if isinstance(item, dict) and str(item.get("bucket_id") or "").strip()
+                ]
             if recalled_rows:
                 for item in recalled_rows:
                     if self._session_debug_row_has_strong_evidence(item):
@@ -8321,7 +8327,26 @@ class GatewayService:
             rerank_score=row.get("rerank_score"),
         ):
             return True
-        return False
+        why = row.get("recall_why") if isinstance(row.get("recall_why"), dict) else {}
+        sources = why.get("sources") if isinstance(why, dict) else []
+        if isinstance(sources, list):
+            strong_sources = {
+                str(source.get("source") or "")
+                for source in sources
+                if isinstance(source, dict)
+            }
+            if strong_sources & {
+                "exact_anchor",
+                "planner_lexical",
+                "rare_name",
+                "explicit_relation_edge",
+            }:
+                return True
+        scores = why.get("score") if isinstance(why.get("score"), dict) else {}
+        return self.recall_policy.has_strong_score(
+            semantic_score=scores.get("semantic"),
+            rerank_score=scores.get("rerank"),
+        )
 
     def _session_hard_exclude_bucket_bypass(self, query: str, item: dict) -> bool:
         bucket = item.get("bucket") if isinstance(item, dict) else None
@@ -8441,6 +8466,12 @@ class GatewayService:
                 for item in payload.get("recalled_moment_debug") or []
                 if isinstance(item, dict) and str(item.get("bucket_id") or "").strip()
             ]
+            if not recalled_rows:
+                recalled_rows = [
+                    item
+                    for item in payload.get("recalled_bucket_debug") or []
+                    if isinstance(item, dict) and str(item.get("bucket_id") or "").strip()
+                ]
             if recalled_rows:
                 for item in recalled_rows:
                     if self._session_debug_row_has_strong_evidence(item):

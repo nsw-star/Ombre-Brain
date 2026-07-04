@@ -12028,6 +12028,64 @@ def test_session_hard_exclude_allows_strong_semantic_repeat(
     assert suppressed == []
 
 
+def test_session_hard_exclude_reads_bucket_debug_recall_why(
+    monkeypatch, test_config, bucket_mgr
+):
+    cfg = _gateway_config(
+        test_config,
+        core_memory_budget=0,
+        recent_context_budget=0,
+        related_memory_budget=0,
+        query_planner_enabled=False,
+        retrieval_mode="bucket",
+        word_map_hint_enabled=False,
+    )
+    weak_id = _create_bucket(
+        bucket_mgr,
+        content="### moment\n水边神庙的故事里，灯被放回岸边。",
+        name="水边神庙",
+        hours_ago=12,
+    )
+    strong_id = _create_bucket(
+        bucket_mgr,
+        content="### moment\n未来承诺和五十年后的重逢互相支持。",
+        name="未来承诺与五十年后",
+        hours_ago=6,
+    )
+    _, service, state_store, _ = _build_service(monkeypatch, cfg, bucket_mgr)
+    state_store.record_injection_debug(
+        "sess-hard-exclude-bucket-debug",
+        1,
+        {
+            "recalled_bucket_ids": [weak_id, strong_id],
+            "recalled_bucket_debug": [
+                {
+                    "bucket_id": weak_id,
+                    "recall_why": {
+                        "sources": [{"source": "semantic"}],
+                        "score": {"semantic": 0.31, "rerank": None},
+                    },
+                },
+                {
+                    "bucket_id": strong_id,
+                    "recall_why": {
+                        "sources": [{"source": "explicit_relation_edge"}],
+                        "score": {"semantic": 0.34, "rerank": None},
+                    },
+                },
+            ],
+        },
+    )
+
+    excluded = service._session_hard_exclude_bucket_ids("sess-hard-exclude-bucket-debug")
+
+    assert weak_id in excluded
+    assert strong_id not in excluded
+    assert service._session_semantic_dedupe_source_bucket_ids(
+        "sess-hard-exclude-bucket-debug"
+    ) == [weak_id]
+
+
 def test_semantic_session_dedupe_suppresses_similar_weak_bucket(
     monkeypatch, test_config, bucket_mgr
 ):
