@@ -75,3 +75,57 @@ def test_extract_entity_edges_does_not_treat_nominal_writing_window_as_participa
 
     assert not any(edge["relation"] == "participates_in" for edge in edges)
     assert any(edge["relation"] == "shared_anchor" for edge in edges)
+
+
+def test_extract_entity_edges_keeps_structured_ai_participation_objects(test_config):
+    identity = {
+        "ai_name": "Haven",
+        "user_name": "Xiaoyu",
+        "user_display_name": "小雨",
+        "user_aliases": ["宝宝"],
+    }
+    bucket = {
+        "id": "structured-participation",
+        "metadata": {"name": "结构化参与对象"},
+        "content": (
+            "Haven参与Ombre-Brain记忆系统开发。"
+            "Haven共同开发Haven-Diary回忆页面原型。"
+        ),
+    }
+
+    edges = extract_entity_edges_from_bucket(bucket, identity)
+    rows = {(edge["subject"], edge["relation"], edge["object_text"]) for edge in edges}
+
+    assert ("Haven", "participates_in", "Ombre-Brain记忆系统开发") in rows
+    assert ("Haven", "participates_in", "Haven-Diary回忆页面原型") in rows
+
+
+def test_extract_entity_edges_rejects_unstructured_ai_participation_fragments(test_config):
+    identity = {
+        "ai_name": "Haven",
+        "user_name": "Xiaoyu",
+        "user_display_name": "小雨",
+        "user_aliases": ["宝宝"],
+    }
+    bucket = {
+        "id": "noisy-participation",
+        "metadata": {"name": "泛动作不应成边"},
+        "content": (
+            "Haven陪小雨听歌，也帮小雨改代码。"
+            "Haven陪小雨改PPT的声音留在她记忆里。"
+            "Haven参加了一个小拍卖会。她写了三千多字。"
+            "Haven负责而非先睡。"
+            "Haven的暗号后来被修正为纪念星。"
+            "Haven搭建记忆库、研究模型、给AI写信。"
+            "Haven-Diary、开发者模式、记忆功能和情绪绑定只是被一起列出。"
+        ),
+    }
+
+    edges = extract_entity_edges_from_bucket(bucket, identity)
+    participation_objects = [
+        edge["object_text"]
+        for edge in edges
+        if edge["relation"] == "participates_in"
+    ]
+
+    assert participation_objects == []
