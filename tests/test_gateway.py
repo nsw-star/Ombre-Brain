@@ -6338,6 +6338,10 @@ def test_gateway_injection_debug_exposes_diffused_chain_bundle(
         "链路温度目标",
     ]
     assert target_debug["temperature_context"][0]["section"] == "affect_anchor"
+    assert target_debug["recall_why"]["status"] == "injected_diffused"
+    assert target_debug["recall_why"]["stage"] == "diffusion_candidate"
+    assert target_debug["recall_why"]["admission"]["reason"] == ""
+    assert any(source["source"] == "diffusion" for source in target_debug["recall_why"]["sources"])
     assert "链路目标温度锚点" in target_debug["temperature_context"][0]["text_preview"]
 
 
@@ -11003,6 +11007,9 @@ def test_entity_edge_boost_prefers_configured_user_preference(
     liked_item = next(item for item in selected if item["bucket"]["id"] == liked_id)
     assert liked_item["entity_edge_match"] is True
     assert liked_item["entity_edge_relation"] == "likes"
+    why = service._recall_why_debug(liked_item, status="admitted", stage="bucket_candidate")
+    assert why["primary_source"] == "entity_edge"
+    assert any(source["source"] == "entity_edge" for source in why["sources"])
 
 
 def test_activated_axis_allows_precise_future_subterm(
@@ -12816,6 +12823,9 @@ def test_voice_query_keeps_voice_direct_without_low_score_background_diffusion(
 
     assert recalled_ids == [voice_id]
     assert debug["recalled_bucket_ids"] == [voice_id]
+    direct_why = debug["recalled_moment_debug"][0]["recall_why"]
+    assert direct_why["status"] == "injected_direct"
+    assert any(source["source"] == "rerank" for source in direct_why["sources"])
     assert background_id not in debug["diffused_bucket_ids"]
     assert "Haven-voice 接入成功" in injected
     assert "流星的讨论" not in injected
@@ -12823,6 +12833,11 @@ def test_voice_query_keeps_voice_direct_without_low_score_background_diffusion(
         moment for moment in debug["suppressed_candidates"] if moment["bucket_id"] == background_id
     )
     assert suppressed_background["admission_reason"] == "non_explicit_query_score_too_low"
+    assert suppressed_background["recall_why"]["status"] == "suppressed"
+    assert (
+        suppressed_background["recall_why"]["admission"]["reason"]
+        == "non_explicit_query_score_too_low"
+    )
 
 
 def test_selected_bucket_moment_bypasses_low_score_fallback_gate(monkeypatch, test_config, bucket_mgr):

@@ -2746,6 +2746,11 @@ class GatewayService:
                         bucket_id = str(bucket.get("id") or "")
                         if not bucket_id:
                             continue
+                        signal = (
+                            bucket.get("_recall_signal")
+                            if isinstance(bucket.get("_recall_signal"), dict)
+                            else {}
+                        )
                         bucket_moments = self._direct_moments_for_bucket(bucket, current_user_query)
                         moment = self._representative_moment(bucket_moments)
                         if not moment:
@@ -2756,6 +2761,7 @@ class GatewayService:
                             )
                         if not moment:
                             continue
+                        moment = self._moment_with_bucket_recall_signal(moment, signal)
                         grouped_moments[bucket_id] = bucket_moments
                         recalled_moments.append(moment)
                     moment_candidates = list(recalled_moments)
@@ -8210,13 +8216,42 @@ class GatewayService:
             return moment
         enriched = dict(moment)
         for key in (
+            "score",
             "semantic_score",
+            "keyword_score",
             "rerank_score",
+            "exact_anchor_score",
             "planner_lexical_match",
             "exact_anchor_match",
+            "exact_anchor_terms",
+            "exact_anchor_fields",
+            "word_map_score",
+            "word_map_hint",
+            "word_map_terms",
+            "word_map_variant_terms",
+            "word_map_neighbor_terms",
             "rare_name_match",
             "rare_name_terms",
             "rare_name_sources",
+            "entity_edge_match",
+            "entity_edge_score",
+            "entity_edge_subject",
+            "entity_edge_relation",
+            "entity_edge_object",
+            "explicit_relation_edge_match",
+            "explicit_relation_edge_confidence",
+            "explicit_relation_edge_peer_bucket_id",
+            "explicit_relation_edge_type",
+            "explicit_relation_edge_focused",
+            "fusion_mode",
+            "fusion_score",
+            "vector_norm",
+            "keyword_norm",
+            "dynamic_alpha",
+            "dynamic_alpha_confidence",
+            "metadata_adjustment",
+            "cooldown_penalty",
+            "matched_query_terms",
         ):
             value = signal.get(key)
             if value is not None and enriched.get(key) is None:
@@ -10358,6 +10393,11 @@ class GatewayService:
                 "has_topic_evidence": bool(row.get("has_topic_evidence")),
                 "reading_note": row.get("reading_note") if isinstance(row.get("reading_note"), dict) else {},
             }
+        )
+        payload["recall_why"] = self._recall_why_debug(
+            payload,
+            status="injected_diffused" if payload["injected"] else "suppressed_diffused",
+            stage="diffusion_candidate",
         )
         return payload
 
@@ -13245,10 +13285,20 @@ class GatewayService:
         return {
             key: item.get(key)
             for key in (
+                "score",
                 "semantic_score",
+                "keyword_score",
                 "rerank_score",
+                "exact_anchor_score",
                 "planner_lexical_match",
                 "exact_anchor_match",
+                "exact_anchor_terms",
+                "exact_anchor_fields",
+                "word_map_score",
+                "word_map_hint",
+                "word_map_terms",
+                "word_map_variant_terms",
+                "word_map_neighbor_terms",
                 "rare_name_match",
                 "rare_name_terms",
                 "rare_name_sources",
@@ -13267,9 +13317,12 @@ class GatewayService:
                 "vector_norm",
                 "keyword_norm",
                 "dynamic_alpha",
+                "dynamic_alpha_confidence",
                 "metadata_adjustment",
                 "cooldown_penalty",
                 "admission_reason",
+                "matched_query_terms",
+                "recall_policy_debug",
             )
             if isinstance(item, dict) and key in item
         }
@@ -14720,19 +14773,207 @@ class GatewayService:
             "section": str(moment.get("section") or ""),
         }
 
+    @staticmethod
+    def _debug_str_list(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            stripped = value.strip()
+            return [stripped] if stripped else []
+        if isinstance(value, (list, tuple, set)):
+            return [str(item) for item in value if str(item).strip()]
+        return [str(value)]
+
+    def _recall_why_debug(
+        self,
+        item: dict[str, Any],
+        *,
+        status: str,
+        stage: str,
+    ) -> dict[str, Any]:
+        sources: list[dict[str, Any]] = []
+
+        def add_source(source_name: str, **details: Any) -> None:
+            cleaned = {
+                key: value
+                for key, value in details.items()
+                if value not in (None, "", [], {})
+            }
+            sources.append({"source": source_name, **cleaned})
+
+        semantic_score = item.get("semantic_score")
+        keyword_score = item.get("keyword_score")
+        rerank_score = item.get("rerank_score")
+        exact_anchor_score = item.get("exact_anchor_score")
+        word_map_score = item.get("word_map_score")
+        entity_edge_score = item.get("entity_edge_score")
+        admission_reason = str(
+            item.get("admission_reason")
+            or item.get("_admission_reason")
+            or item.get("suppression_reason")
+            or ""
+        )
+
+        if item.get("exact_anchor_match") or self._safe_float(exact_anchor_score, 0.0) > 0:
+            add_source(
+                "exact_anchor",
+                score=self._safe_float(exact_anchor_score, 0.0),
+                terms=self._debug_str_list(item.get("exact_anchor_terms")),
+                fields=self._debug_str_list(item.get("exact_anchor_fields")),
+            )
+        if item.get("planner_lexical_match"):
+            add_source(
+                "planner_lexical",
+                matched_terms=self._debug_str_list(item.get("matched_query_terms")),
+            )
+        if item.get("rare_name_match"):
+            add_source(
+                "rare_name",
+                terms=self._debug_str_list(item.get("rare_name_terms")),
+                sources=self._debug_str_list(item.get("rare_name_sources")),
+            )
+        if item.get("entity_edge_match"):
+            add_source(
+                "entity_edge",
+                score=self._safe_float(entity_edge_score, 0.0),
+                subject=str(item.get("entity_edge_subject") or ""),
+                relation=str(item.get("entity_edge_relation") or ""),
+                object=str(item.get("entity_edge_object") or ""),
+            )
+        if item.get("explicit_relation_edge_match"):
+            add_source(
+                "explicit_relation_edge",
+                confidence=self._safe_float(item.get("explicit_relation_edge_confidence"), 0.0),
+                peer_bucket_id=str(item.get("explicit_relation_edge_peer_bucket_id") or ""),
+                edge_type=str(item.get("explicit_relation_edge_type") or ""),
+                focused=bool(item.get("explicit_relation_edge_focused")),
+            )
+        if item.get("word_map_hint") or self._safe_float(word_map_score, 0.0) > 0:
+            add_source(
+                "word_map",
+                score=self._safe_float(word_map_score, 0.0),
+                terms=self._debug_str_list(item.get("word_map_terms")),
+                variant_terms=self._debug_str_list(item.get("word_map_variant_terms")),
+                neighbor_terms=self._debug_str_list(item.get("word_map_neighbor_terms")),
+            )
+        if semantic_score is not None and self._safe_float(semantic_score, 0.0) > 0:
+            add_source("semantic", score=self._safe_float(semantic_score, 0.0))
+        if keyword_score is not None and (
+            self._safe_float(keyword_score, 0.0) > 0 or item.get("matched_query_terms")
+        ):
+            add_source(
+                "keyword",
+                score=self._safe_float(keyword_score, 0.0),
+                matched_terms=self._debug_str_list(item.get("matched_query_terms")),
+            )
+        if rerank_score is not None:
+            add_source("rerank", score=self._safe_float(rerank_score, 0.0))
+        if stage == "diffusion_candidate" or item.get("why") or item.get("source"):
+            add_source(
+                "diffusion",
+                why=str(item.get("why") or ""),
+                path_source=str(item.get("source") or ""),
+                confidence=self._safe_float(item.get("confidence"), 0.0),
+                activation=self._safe_float(item.get("activation"), 0.0),
+                chain_bundle=bool(item.get("chain_bundle")),
+                has_topic_evidence=bool(item.get("has_topic_evidence")),
+            )
+
+        debug = item.get("recall_policy_debug")
+        return {
+            "status": str(status or ""),
+            "stage": str(stage or ""),
+            "primary_source": str(sources[0]["source"] if sources else ""),
+            "sources": sources,
+            "score": {
+                "final": self._safe_float(item.get("score"), 0.0),
+                "semantic": (
+                    self._safe_float(semantic_score, 0.0)
+                    if semantic_score is not None
+                    else None
+                ),
+                "keyword": (
+                    self._safe_float(keyword_score, 0.0)
+                    if keyword_score is not None
+                    else None
+                ),
+                "rerank": (
+                    self._safe_float(rerank_score, 0.0)
+                    if rerank_score is not None
+                    else None
+                ),
+                "exact_anchor": self._safe_float(exact_anchor_score, 0.0),
+                "word_map": self._safe_float(word_map_score, 0.0),
+                "entity_edge": (
+                    self._safe_float(entity_edge_score, 0.0)
+                    if entity_edge_score is not None
+                    else None
+                ),
+                "fusion_mode": str(item.get("fusion_mode") or ""),
+                "fusion_score": self._safe_float(item.get("fusion_score"), 0.0),
+                "vector_norm": self._safe_float(item.get("vector_norm"), 0.0),
+                "keyword_norm": self._safe_float(item.get("keyword_norm"), 0.0),
+                "dynamic_alpha": (
+                    self._safe_float(item.get("dynamic_alpha"), 0.0)
+                    if item.get("dynamic_alpha") is not None
+                    else None
+                ),
+                "dynamic_alpha_confidence": (
+                    self._safe_float(item.get("dynamic_alpha_confidence"), 0.0)
+                    if item.get("dynamic_alpha_confidence") is not None
+                    else None
+                ),
+                "metadata_adjustment": self._safe_float(item.get("metadata_adjustment"), 0.0),
+                "cooldown_penalty": self._safe_float(item.get("cooldown_penalty"), 0.0),
+            },
+            "admission": {
+                "reason": admission_reason,
+                "policy_debug": debug if isinstance(debug, dict) else {},
+                "semantic_session_dedupe": {
+                    "similarity": (
+                        self._safe_float(item.get("semantic_session_dedupe_similarity"), 0.0)
+                        if item.get("semantic_session_dedupe_similarity") is not None
+                        else None
+                    ),
+                    "source_bucket_id": str(
+                        item.get("semantic_session_dedupe_source_bucket_id") or ""
+                    ),
+                    "method": str(item.get("semantic_session_dedupe_method") or ""),
+                },
+            },
+        }
+
+    def _format_selected_bucket_debug(
+        self,
+        bucket: dict,
+        *,
+        explicit_lookup: bool = False,
+        query: str = "",
+    ) -> dict[str, Any]:
+        signal = bucket.get("_recall_signal") if isinstance(bucket.get("_recall_signal"), dict) else {}
+        item = {"bucket": bucket, **signal}
+        item.setdefault("admission_reason", "admitted_bucket")
+        return self._format_suppressed_bucket_debug(
+            item,
+            explicit_lookup=explicit_lookup,
+            query=query,
+            status="admitted",
+        )
+
     def _format_suppressed_bucket_debug(
         self,
         item: dict,
         *,
         explicit_lookup: bool = False,
         query: str = "",
+        status: str = "suppressed",
     ) -> dict[str, Any]:
         bucket = item.get("bucket") if isinstance(item, dict) else {}
         if not isinstance(bucket, dict):
             bucket = {}
         metadata = bucket.get("metadata", {}) if isinstance(bucket.get("metadata"), dict) else {}
         debug = item.get("recall_policy_debug")
-        return {
+        payload = {
             "bucket_id": str(bucket.get("id") or ""),
             "bucket_name": str(metadata.get("name") or bucket.get("id") or ""),
             "admission_reason": str(item.get("admission_reason") or "suppressed"),
@@ -14790,6 +15031,12 @@ class GatewayService:
             ),
             "content_preview": self._clip_text(bucket_content_for_recall(bucket), 180),
         }
+        payload["recall_why"] = self._recall_why_debug(
+            {**item, **payload},
+            status=status,
+            stage="bucket_candidate",
+        )
+        return payload
 
     def _format_moment_debug(
         self,
@@ -14799,17 +15046,24 @@ class GatewayService:
         include_text: bool = False,
         query: str = "",
         direct_render: dict[str, Any] | None = None,
+        status: str = "",
     ) -> dict[str, Any]:
+        admission_reason = str(moment.get("admission_reason") or moment.get("_admission_reason") or "")
         payload = {
             "bucket_id": str(moment.get("bucket_id") or ""),
             "bucket_name": self._moment_bucket_title(moment),
             "moment_id": str(moment.get("moment_id") or ""),
             "section": moment.get("section"),
-            "admission_reason": str(moment.get("admission_reason") or moment.get("_admission_reason") or ""),
+            "admission_reason": admission_reason,
             "score": self._safe_float(moment.get("score"), 0.0),
             "semantic_score": (
                 self._safe_float(moment.get("semantic_score"), 0.0)
                 if moment.get("semantic_score") is not None
+                else None
+            ),
+            "keyword_score": (
+                self._safe_float(moment.get("keyword_score"), 0.0)
+                if moment.get("keyword_score") is not None
                 else None
             ),
             "rerank_score": (
@@ -14817,8 +15071,11 @@ class GatewayService:
                 if moment.get("rerank_score") is not None
                 else None
             ),
+            "exact_anchor_score": self._safe_float(moment.get("exact_anchor_score"), 0.0),
             "planner_lexical_match": bool(moment.get("planner_lexical_match")),
             "exact_anchor_match": bool(moment.get("exact_anchor_match")),
+            "exact_anchor_terms": list(moment.get("exact_anchor_terms") or []),
+            "exact_anchor_fields": list(moment.get("exact_anchor_fields") or []),
             "word_map_score": self._safe_float(moment.get("word_map_score"), 0.0),
             "word_map_hint": bool(moment.get("word_map_hint")),
             "word_map_terms": list(moment.get("word_map_terms") or []),
@@ -14827,6 +15084,43 @@ class GatewayService:
             "rare_name_match": bool(moment.get("rare_name_match")),
             "rare_name_terms": list(moment.get("rare_name_terms") or []),
             "rare_name_sources": list(moment.get("rare_name_sources") or []),
+            "entity_edge_match": bool(moment.get("entity_edge_match")),
+            "entity_edge_score": (
+                self._safe_float(moment.get("entity_edge_score"), 0.0)
+                if moment.get("entity_edge_score") is not None
+                else None
+            ),
+            "entity_edge_subject": str(moment.get("entity_edge_subject") or ""),
+            "entity_edge_relation": str(moment.get("entity_edge_relation") or ""),
+            "entity_edge_object": str(moment.get("entity_edge_object") or ""),
+            "explicit_relation_edge_match": bool(moment.get("explicit_relation_edge_match")),
+            "explicit_relation_edge_confidence": (
+                self._safe_float(moment.get("explicit_relation_edge_confidence"), 0.0)
+                if moment.get("explicit_relation_edge_confidence") is not None
+                else None
+            ),
+            "explicit_relation_edge_peer_bucket_id": str(
+                moment.get("explicit_relation_edge_peer_bucket_id") or ""
+            ),
+            "explicit_relation_edge_type": str(moment.get("explicit_relation_edge_type") or ""),
+            "explicit_relation_edge_focused": bool(moment.get("explicit_relation_edge_focused")),
+            "fusion_mode": str(moment.get("fusion_mode") or ""),
+            "fusion_score": self._safe_float(moment.get("fusion_score"), 0.0),
+            "vector_norm": self._safe_float(moment.get("vector_norm"), 0.0),
+            "keyword_norm": self._safe_float(moment.get("keyword_norm"), 0.0),
+            "dynamic_alpha": (
+                self._safe_float(moment.get("dynamic_alpha"), 0.0)
+                if moment.get("dynamic_alpha") is not None
+                else None
+            ),
+            "dynamic_alpha_confidence": (
+                self._safe_float(moment.get("dynamic_alpha_confidence"), 0.0)
+                if moment.get("dynamic_alpha_confidence") is not None
+                else None
+            ),
+            "metadata_adjustment": self._safe_float(moment.get("metadata_adjustment"), 0.0),
+            "cooldown_penalty": self._safe_float(moment.get("cooldown_penalty"), 0.0),
+            "matched_query_terms": list(moment.get("matched_query_terms") or []),
             "recall_policy_debug": (
                 moment.get("recall_policy_debug")
                 if isinstance(moment.get("recall_policy_debug"), dict)
@@ -14845,6 +15139,11 @@ class GatewayService:
             payload["reading_note"] = moment["_reading_note"]
         if include_text:
             payload["text_preview"] = self._moment_text(moment, 180)
+        payload["recall_why"] = self._recall_why_debug(
+            {**moment, **payload},
+            status=status or ("suppressed" if admission_reason else "candidate"),
+            stage="moment_candidate",
+        )
         return payload
 
     def _build_injection_debug_payload(
@@ -14996,6 +15295,7 @@ class GatewayService:
                         self.recalled_budget,
                         query_text=query,
                     ),
+                    status="injected_direct",
                 )
                 for moment in recalled_moments[:20]
             ],
@@ -15016,6 +15316,7 @@ class GatewayService:
                     explicit_lookup=explicit_lookup,
                     include_text=True,
                     query=query,
+                    status="suppressed",
                 )
                 for moment in (suppressed_moments or [])[:20]
             ],
@@ -15111,6 +15412,10 @@ class GatewayService:
             "query_planner_debug": query_planner_debug,
             "memory_sentinel_debug": memory_sentinel_debug,
             "recalled_bucket_ids": recalled_ids,
+            "recalled_bucket_debug": [
+                self._format_selected_bucket_debug(bucket, query=query)
+                for bucket in (selected_buckets or [])[:20]
+            ],
             "recalled_moment_ids": [],
             "diffused_bucket_ids": [],
             "diffused_moment_ids": [],
