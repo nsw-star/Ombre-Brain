@@ -4688,7 +4688,7 @@ def test_gateway_operit_context_rewrite_splits_text_attachment_when_enabled(
     assert user_content.endswith("Current user message:\n猫咪最近又干了什么？")
 
 
-def test_gateway_operit_context_rewrite_skips_tool_protocol(
+def test_gateway_operit_context_rewrite_allows_prior_tool_protocol(
     monkeypatch,
     test_config,
     bucket_mgr,
@@ -4740,7 +4740,63 @@ def test_gateway_operit_context_rewrite_skips_tool_protocol(
 
     assert response.status_code == 200
     joined = _joined_message_content(captured[0]["json"]["messages"])
-    assert "message_insert_extra_bundle_177757652240" in joined
+    assert "message_insert_extra_bundle_177757652240" not in joined
+    assert "Operit Activity Context" in joined
+    assert "当前时间" in joined
+
+
+def test_gateway_operit_context_rewrite_skips_current_tool_continuation(
+    monkeypatch,
+    test_config,
+    bucket_mgr,
+):
+    app, _, _, captured = _build_service(
+        monkeypatch,
+        _gateway_config(
+            test_config,
+            operit_context_rewrite_enabled=True,
+            recent_context_budget=0,
+            current_inner_state_interval_rounds=0,
+        ),
+        bucket_mgr,
+        embedding_results=[],
+    )
+    operit_extra = (
+        ' <attachment id="message_insert_extra_bundle_177757652241" '
+        'filename="Time:02:58 01/2026/6" type="text/plain" size="104">'
+        "【当前时间】\n2026-06-01 02:58:42 时区: Asia/Shanghai\n"
+        "</attachment>"
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers={
+                "Authorization": "Bearer gateway-secret",
+                "X-Ombre-Session-Id": "sess-operit-current-tool-skip",
+            },
+            json={
+                "messages": [
+                    {"role": "user", "content": "先查一下" + operit_extra},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    {"role": "tool", "tool_call_id": "call_1", "content": "工具返回"},
+                ]
+            },
+        )
+
+    assert response.status_code == 200
+    joined = _joined_message_content(captured[0]["json"]["messages"])
+    assert "message_insert_extra_bundle_177757652241" in joined
     assert "Operit Activity Context" not in joined
 
 

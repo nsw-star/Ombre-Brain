@@ -16071,7 +16071,8 @@ class GatewayService:
         if not isinstance(messages, list) or not messages:
             debug["skip_reason"] = "invalid_messages"
             return messages, "", "", debug
-        if self._messages_contain_tool_protocol(messages):
+        current_user_index = self._current_turn_user_index(messages)
+        if self._messages_are_tool_continuation(messages, current_user_index):
             debug["skip_reason"] = "tool_protocol"
             return messages, "", "", debug
         if self._messages_contain_non_text_content(messages):
@@ -16081,7 +16082,6 @@ class GatewayService:
             debug["skip_reason"] = "no_operit_context"
             return messages, "", "", debug
 
-        current_user_index = self._current_turn_user_index(messages)
         stable_parts: list[str] = []
         activity_parts: list[str] = []
         rewritten: list[dict] = []
@@ -16126,20 +16126,33 @@ class GatewayService:
         debug["activity_chars"] = len(activity_context)
         return rewritten, stable_context, activity_context, debug
 
-    def _messages_contain_tool_protocol(self, messages: list[dict]) -> bool:
-        for message in messages or []:
+    def _messages_are_tool_continuation(
+        self,
+        messages: list[dict],
+        current_user_index: int | None,
+    ) -> bool:
+        if current_user_index is not None:
+            return False
+        for message in reversed(messages or []):
             if not isinstance(message, dict):
                 continue
-            if message.get("role") == "tool" or message.get("tool_call_id"):
-                return True
-            tool_calls = message.get("tool_calls")
-            if isinstance(tool_calls, list) and tool_calls:
-                return True
-            content = message.get("content")
-            if isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") in {"tool_result", "tool_use"}:
-                        return True
+            if message.get("role") == "system":
+                continue
+            return self._message_has_tool_protocol(message)
+        return False
+
+    @staticmethod
+    def _message_has_tool_protocol(message: dict[str, Any]) -> bool:
+        if message.get("role") == "tool" or message.get("tool_call_id"):
+            return True
+        tool_calls = message.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+            return True
+        content = message.get("content")
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and item.get("type") in {"tool_result", "tool_use"}:
+                    return True
         return False
 
     def _messages_contain_non_text_content(self, messages: list[dict]) -> bool:
