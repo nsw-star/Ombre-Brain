@@ -190,9 +190,59 @@ def test_audit_entity_edges_reports_dry_run_backfill_gap(tmp_path, test_config, 
     assert report["summary"]["total_buckets"] == 2
     assert report["summary"]["existing_edges"] == 0
     assert report["summary"]["dry_run_edge_buckets"] == 1
+    assert report["summary"]["backfill_edges"] >= 2
+    assert report["summary"]["applied_backfill_edges"] == 0
     assert report["summary"]["missing_backfill_bucket_count"] == 1
     assert report["summary"]["dry_run_no_edge_bucket_count"] == 1
+    assert not (tmp_path / "state" / "entity_edges.jsonl").exists()
     assert report["missing_backfill_buckets"][0]["bucket_id"] == bucket_with_edges
     assert report["dry_run_no_edge_buckets"][0]["bucket_id"] == bucket_without_edges
     assert report["case_coverage"][0]["expected_with_dry_run_edges"] == [bucket_with_edges]
     assert report["case_coverage"][0]["expected_missing_dry_run_edges"] == [bucket_without_edges]
+
+
+def test_audit_entity_edges_apply_appends_missing_edges_once(tmp_path, test_config, bucket_mgr):
+    test_config["identity"] = {
+        "ai_name": "Haven",
+        "user_name": "Xiaoyu",
+        "user_display_name": "小雨",
+        "user_aliases": ["宝宝"],
+    }
+    bucket_id = _run(
+        bucket_mgr.create(
+            "小雨喜欢暗色故事。Haven参与Ombre-Brain记忆系统开发。",
+            name="有实体边的桶",
+            tags=["偏好", "项目"],
+            domain=["relationship"],
+        )
+    )
+    args = audit_entity_edges.parse_args(
+        [
+            "--buckets-dir",
+            test_config["buckets_dir"],
+            "--state-dir",
+            test_config["state_dir"],
+            "--backup-dir",
+            str(tmp_path / "backups"),
+            "--apply",
+        ]
+    )
+
+    first = _run(audit_entity_edges.audit(args))
+    edge_path = tmp_path / "state" / "entity_edges.jsonl"
+    lines = edge_path.read_text(encoding="utf-8").splitlines()
+
+    assert first["summary"]["backfill_edges"] >= 2
+    assert first["summary"]["applied_backfill_edges"] == first["summary"]["backfill_edges"]
+    assert first["backfill"]["backup_path"] == ""
+    assert len(lines) == first["summary"]["applied_backfill_edges"]
+    assert all(json.loads(line)["bucket_id"] == bucket_id for line in lines)
+
+    second = _run(audit_entity_edges.audit(args))
+
+    assert second["summary"]["existing_edges"] == len(lines)
+    assert second["summary"]["backfill_edges"] == 0
+    assert second["summary"]["applied_backfill_edges"] == 0
+    assert second["backfill"]["backup_path"] == ""
+    assert not (tmp_path / "backups" / "entity_edges.jsonl").exists()
+    assert edge_path.read_text(encoding="utf-8").splitlines() == lines

@@ -7,9 +7,11 @@ import argparse
 import asyncio
 import json
 import re
+import shutil
 import sys
 from collections import Counter, defaultdict
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +85,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=5,
         help="Flag object keys appearing in at least this many buckets as broad/noisy.",
     )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Append missing dry-run entity edges to state/entity_edges.jsonl. Default is dry-run.",
+    )
+    parser.add_argument(
+        "--backup-dir",
+        default="",
+        help="Backup directory used with --apply when entity_edges.jsonl already exists.",
+    )
     return parser.parse_args(argv)
 
 
@@ -138,6 +150,46 @@ def _normalize_extracted_edges(edges: list[dict[str, Any]]) -> list[dict[str, An
         seen.add(key)
         normalized.append(row)
     return normalized
+
+
+def _missing_edges(existing_edges: list[dict[str, Any]], dry_run_edges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    existing_keys = {_edge_key(edge) for edge in existing_edges}
+    return [edge for edge in dry_run_edges if _edge_key(edge) not in existing_keys]
+
+
+def _utc_stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _backup_existing_edges(path: Path, backup_dir_arg: str) -> str:
+    if not path.exists():
+        return ""
+    backup_dir = Path(backup_dir_arg) if backup_dir_arg else path.parent / "backups" / f"entity_edges_backfill_{_utc_stamp()}"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_dir / path.name
+    shutil.copy2(path, backup_path)
+    return str(backup_path)
+
+
+def _file_needs_leading_newline(path: Path) -> bool:
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+    with path.open("rb") as fh:
+        fh.seek(-1, 2)
+        return fh.read(1) not in {b"\n", b"\r"}
+
+
+def _append_edges_jsonl(path: Path, edges: list[dict[str, Any]]) -> int:
+    if not edges:
+        return 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    needs_newline = _file_needs_leading_newline(path)
+    with path.open("a", encoding="utf-8", newline="\n") as fh:
+        if needs_newline:
+            fh.write("\n")
+        for edge in edges:
+            fh.write(json.dumps(edge, ensure_ascii=False, sort_keys=True) + "\n")
+    return len(edges)
 
 
 def _load_cases(path: str) -> list[dict[str, Any]]:
@@ -350,6 +402,10 @@ def _write_markdown(report: dict[str, Any], path: Path) -> None:
         f"- total_buckets: `{summary['total_buckets']}`",
         f"- existing_edges: `{summary['existing_edges']}` across `{summary['existing_edge_buckets']}` buckets",
         f"- dry_run_edges: `{summary['dry_run_edges']}` across `{summary['dry_run_edge_buckets']}` buckets",
+        f"- backfill_edges: `{summary['backfill_edges']}` across `{summary['backfill_edge_buckets']}` buckets",
+        f"- apply: `{report['backfill']['apply']}`",
+        f"- applied_backfill_edges: `{summary['applied_backfill_edges']}`",
+        f"- backup_path: `{report['backfill']['backup_path']}`",
         f"- missing_backfill_buckets: `{summary['missing_backfill_bucket_count']}`",
         f"- dry_run_no_edge_buckets: `{summary['dry_run_no_edge_bucket_count']}`",
         "",
@@ -371,6 +427,13 @@ def _write_markdown(report: dict[str, Any], path: Path) -> None:
     for row in report["missing_backfill_samples"]:
         lines.append(f"- `{row['bucket_id']}` {row['bucket_name']}")
     if not report["missing_backfill_samples"]:
+        lines.append("- None.")
+    lines.extend(["", "## Backfill Edge Samples", ""])
+    for edge in report["backfill"]["edges"][: summary["sample_limit"]]:
+        lines.append(
+            f"- `{edge.get('bucket_id')}` {edge.get('subject')} / {edge.get('relation')} / {edge.get('object_text')}"
+        )
+    if not report["backfill"]["edges"]:
         lines.append("- None.")
     lines.extend(["", "## Dry-run No-edge Samples", ""])
     for row in report["dry_run_no_edge_samples"]:
@@ -409,9 +472,16 @@ async def audit(args: argparse.Namespace) -> dict[str, Any]:
     for bucket in buckets:
         dry_run_edges.extend(extract_entity_edges_from_bucket(bucket, identity))
     dry_run_edges = _normalize_extracted_edges(dry_run_edges)
+    backfill_edges = _missing_edges(existing_edges, dry_run_edges)
+    backup_path = ""
+    applied_count = 0
+    if args.apply and backfill_edges:
+        backup_path = _backup_existing_edges(existing_edges_path, args.backup_dir)
+        applied_count = _append_edges_jsonl(existing_edges_path, backfill_edges)
 
     existing_bucket_ids = {str(edge.get("bucket_id") or "") for edge in existing_edges if edge.get("bucket_id")}
     dry_run_bucket_ids = {str(edge.get("bucket_id") or "") for edge in dry_run_edges if edge.get("bucket_id")}
+    backfill_bucket_ids = {str(edge.get("bucket_id") or "") for edge in backfill_edges if edge.get("bucket_id")}
     existing_edges_by_bucket = _edges_by_bucket(existing_edges)
     dry_run_edges_by_bucket = _edges_by_bucket(dry_run_edges)
     all_bucket_ids = set(bucket_by_id)
@@ -428,12 +498,26 @@ async def audit(args: argparse.Namespace) -> dict[str, Any]:
         "include_archive": not args.exclude_archive,
         "summary": {
             "total_buckets": len(buckets),
+            "sample_limit": args.sample_limit,
             "existing_edges": len(existing_edges),
             "existing_edge_buckets": len(existing_bucket_ids),
             "dry_run_edges": len(dry_run_edges),
             "dry_run_edge_buckets": len(dry_run_bucket_ids),
+            "backfill_edges": len(backfill_edges),
+            "backfill_edge_buckets": len(backfill_bucket_ids),
+            "applied_backfill_edges": applied_count,
             "missing_backfill_bucket_count": len(missing_backfill_ids),
             "dry_run_no_edge_bucket_count": len(no_edge_ids),
+        },
+        "backfill": {
+            "apply": bool(args.apply),
+            "mode": "apply" if args.apply else "dry_run",
+            "path": str(existing_edges_path),
+            "edge_count": len(backfill_edges),
+            "edge_bucket_count": len(backfill_bucket_ids),
+            "applied_edge_count": applied_count,
+            "backup_path": backup_path,
+            "edges": backfill_edges,
         },
         "existing": _summarize_edges(existing_edges, bucket_by_id, args),
         "dry_run": _summarize_edges(dry_run_edges, bucket_by_id, args),
@@ -466,6 +550,9 @@ async def main(argv: list[str] | None = None) -> int:
         f"existing_edge_buckets={summary['existing_edge_buckets']} "
         f"dry_run_edges={summary['dry_run_edges']} "
         f"dry_run_edge_buckets={summary['dry_run_edge_buckets']} "
+        f"backfill_edges={summary['backfill_edges']} "
+        f"backfill_edge_buckets={summary['backfill_edge_buckets']} "
+        f"applied_backfill_edges={summary['applied_backfill_edges']} "
         f"missing_backfill_buckets={summary['missing_backfill_bucket_count']} "
         f"dry_run_no_edge_buckets={summary['dry_run_no_edge_bucket_count']}"
     )
