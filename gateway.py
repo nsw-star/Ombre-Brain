@@ -52,7 +52,7 @@ from memory_relevance import (
     recall_topic_query,
     relevance_multiplier,
 )
-from query_prompts import MEMORY_SENTINEL_SYSTEM_PROMPT, QUERY_PLANNER_SYSTEM_PROMPT
+from query_prompts import QUERY_PLANNER_SYSTEM_PROMPT
 from memory_layers import (
     CONTEXT_ONLY_SECTIONS,
     LAYER_SOURCE_RECORD,
@@ -603,18 +603,6 @@ class GatewayService:
             self.gateway_cfg.get("memory_sentinel_enabled"),
             True,
         )
-        self.memory_sentinel_llm_enabled = self._bool_config_value(
-            self.gateway_cfg.get("memory_sentinel_llm_enabled"),
-            False,
-        )
-        (
-            self.memory_sentinel_model,
-            self.memory_sentinel_uses_dehydrator,
-        ) = self._resolve_memory_sentinel_model()
-        self.memory_sentinel_context_turns = max(
-            0,
-            min(8, int(self.gateway_cfg.get("memory_sentinel_context_turns", 3))),
-        )
         self.domain_sentinel_enabled = self._bool_config_value(
             self.gateway_cfg.get("domain_sentinel_enabled"),
             True,
@@ -905,9 +893,6 @@ class GatewayService:
                 "just_now_context_max_turns": self.just_now_context_max_turns,
                 "just_now_context_budget": self.just_now_context_budget,
                 "memory_sentinel_enabled": self.memory_sentinel_enabled,
-                "memory_sentinel_llm_enabled": self.memory_sentinel_llm_enabled,
-                "memory_sentinel_model": self.memory_sentinel_model,
-                "memory_sentinel_context_turns": self.memory_sentinel_context_turns,
                 "domain_sentinel_enabled": self.domain_sentinel_enabled,
                 "domain_sentinel_model": self.domain_sentinel_model,
                 "domain_sentinel_base_url": self.domain_sentinel_base_url,
@@ -983,9 +968,6 @@ class GatewayService:
             "just_now_context_budget": self.just_now_context_budget,
             "conversation_turns_max_entries": self.conversation_turns_max_entries,
             "memory_sentinel_enabled": self.memory_sentinel_enabled,
-            "memory_sentinel_llm_enabled": self.memory_sentinel_llm_enabled,
-            "memory_sentinel_model": self.memory_sentinel_model,
-            "memory_sentinel_context_turns": self.memory_sentinel_context_turns,
             "domain_sentinel_enabled": self.domain_sentinel_enabled,
             "domain_sentinel_model": self.domain_sentinel_model,
             "domain_sentinel_base_url": self.domain_sentinel_base_url,
@@ -1347,28 +1329,6 @@ class GatewayService:
             )
             self.gateway_cfg["memory_sentinel_enabled"] = self.memory_sentinel_enabled
             updated.append("gateway.memory_sentinel_enabled")
-        if "memory_sentinel_llm_enabled" in payload:
-            self.memory_sentinel_llm_enabled = self._bool_config_value(
-                payload["memory_sentinel_llm_enabled"],
-                True,
-            )
-            self.gateway_cfg["memory_sentinel_llm_enabled"] = self.memory_sentinel_llm_enabled
-            updated.append("gateway.memory_sentinel_llm_enabled")
-        if "memory_sentinel_model" in payload:
-            configured_model = str(payload["memory_sentinel_model"] or "").strip()
-            (
-                self.memory_sentinel_model,
-                self.memory_sentinel_uses_dehydrator,
-            ) = self._resolve_memory_sentinel_model(configured_model)
-            self.gateway_cfg["memory_sentinel_model"] = configured_model
-            updated.append("gateway.memory_sentinel_model")
-        if "memory_sentinel_context_turns" in payload:
-            self.memory_sentinel_context_turns = max(
-                0,
-                min(8, int(payload["memory_sentinel_context_turns"])),
-            )
-            self.gateway_cfg["memory_sentinel_context_turns"] = self.memory_sentinel_context_turns
-            updated.append("gateway.memory_sentinel_context_turns")
         if "domain_sentinel_enabled" in payload:
             self.domain_sentinel_enabled = self._bool_config_value(
                 payload["domain_sentinel_enabled"],
@@ -11893,36 +11853,16 @@ class GatewayService:
     ) -> str:
         return await self._build_diffused_memory_block(recalled_buckets, all_buckets)
 
-    def _resolve_memory_sentinel_model(self, configured_model: Any = None) -> tuple[str, bool]:
-        if configured_model is None:
-            configured_model = self.gateway_cfg.get("memory_sentinel_model")
-        explicit_model = str(configured_model or "").strip()
-        if explicit_model:
-            return explicit_model, False
-        model = str(getattr(self.dehydrator, "model", "") or "").strip()
-        if not model:
-            dehy_cfg = self.config.get("dehydration", {})
-            if isinstance(dehy_cfg, dict):
-                model = str(dehy_cfg.get("model") or "").strip()
-        return model, True
-
     def _memory_sentinel_debug_base(self, query: str) -> dict[str, Any]:
         return {
             "enabled": bool(self.memory_sentinel_enabled),
-            "llm_enabled": bool(self.memory_sentinel_llm_enabled),
             "called": False,
             "route": "",
             "reason": "",
             "anchors": [],
             "confidence": None,
             "hard_bypass_reason": "",
-            "fallback_used": False,
-            "errors": [],
-            "model": self.memory_sentinel_model,
-            "model_source": "dehydration" if self.memory_sentinel_uses_dehydrator else "gateway",
-            "context_turns": [],
             "rule_route": False,
-            "llm_skipped_reason": "",
             "searchable_residue_terms": [],
             "original_query": self._clip_text(str(query or ""), 500),
         }
@@ -11959,30 +11899,6 @@ class GatewayService:
             debug["rule_route"] = True
             debug.update(rule_plan)
             return debug
-        if not self.memory_sentinel_llm_enabled:
-            debug["llm_skipped_reason"] = "memory_sentinel_llm_disabled"
-            return debug
-
-        turns = self._memory_sentinel_recent_turns(session_id)
-        debug["context_turns"] = [
-            {
-                "round_id": turn.get("round_id"),
-                "user_preview": self._clip_text(turn.get("user_text") or "", 120),
-                "assistant_preview": self._clip_text(turn.get("assistant_text") or "", 120),
-            }
-            for turn in turns
-        ]
-        debug["called"] = True
-        plan, error = await self._call_memory_sentinel(query, turns)
-        if error:
-            debug["errors"].append(error)
-            debug["fallback_used"] = True
-            return debug
-        if not plan:
-            debug["errors"].append("memory_sentinel_empty_response")
-            debug["fallback_used"] = True
-            return debug
-        debug.update(plan)
         return debug
 
     def _memory_sentinel_hard_bypass_reason(
@@ -12021,7 +11937,7 @@ class GatewayService:
         exact_terms = self._extract_exact_anchor_terms(text, normalized)
         if exact_terms and locatable_terms and not self._memory_sentinel_low_signal_exact_anchor_only(text, exact_terms):
             return "exact_anchor"
-        if locatable_terms and not self._memory_sentinel_model_should_review_entity(text, locatable_terms):
+        if locatable_terms and not self._memory_sentinel_rule_should_review_entity(text, locatable_terms):
             return "entity"
         if self.recall_policy.requires_topic_evidence(text):
             return "topic_evidence_marker"
@@ -12243,7 +12159,7 @@ class GatewayService:
         keys = [self._compact_lookup_key(term) for term in exact_terms]
         return bool(keys) and all(key in low_signal_terms for key in keys)
 
-    def _memory_sentinel_model_should_review_entity(self, query: str, entity_terms: list[str]) -> bool:
+    def _memory_sentinel_rule_should_review_entity(self, query: str, entity_terms: list[str]) -> bool:
         if self._memory_sentinel_low_signal_entity_only(query, entity_terms):
             return True
         compact = self._compact_lookup_key(query)
@@ -12263,107 +12179,6 @@ class GatewayService:
         if self._query_looks_emotional_reason_lookup(query):
             return True
         return False
-
-    def _memory_sentinel_recent_turns(self, session_id: str) -> list[dict[str, Any]]:
-        if self.memory_sentinel_context_turns <= 0:
-            return []
-        profile_id = str(getattr(self.persona_engine, "profile_id", "") or "default")
-        turns = self.state_store.list_recent_conversation_turns(
-            profile_id=profile_id,
-            session_id=session_id,
-            limit=self.memory_sentinel_context_turns,
-            hours=max(1.0, self.just_now_context_hours or 6.0),
-        )
-        return list(reversed(turns))
-
-    async def _call_memory_sentinel(
-        self,
-        query: str,
-        turns: list[dict[str, Any]],
-    ) -> tuple[dict[str, Any] | None, str | None]:
-        model = self.memory_sentinel_model
-        if not model:
-            return None, "memory_sentinel_model_missing"
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": MEMORY_SENTINEL_SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "latest_user_message": query,
-                            "recent_turns": [
-                                {
-                                    "user": self._clip_text(turn.get("user_text") or "", 500),
-                                    "assistant": self._clip_text(turn.get("assistant_text") or "", 500),
-                                }
-                                for turn in turns
-                            ],
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ],
-            "temperature": 0,
-            "max_tokens": 220,
-            "stream": False,
-        }
-        if self.memory_sentinel_uses_dehydrator:
-            content, error = await self._call_query_planner_with_dehydrator(payload)
-            if error:
-                return None, error.replace("query_planner", "memory_sentinel")
-            if not content:
-                return None, "memory_sentinel_empty_response"
-            try:
-                return self._parse_memory_sentinel_response(content), None
-            except ValueError as exc:
-                return None, f"memory_sentinel_parse_failed:{exc}"
-
-        try:
-            response = await self._forward_upstream(payload)
-        except Exception as exc:
-            logger.warning("Gateway memory sentinel call failed: %s", exc)
-            return None, f"memory_sentinel_call_failed:{type(exc).__name__}"
-        if response.status_code >= 400:
-            return None, f"memory_sentinel_upstream_status:{response.status_code}"
-        try:
-            body = response.json()
-        except Exception:
-            return None, "memory_sentinel_invalid_upstream_json"
-        content = self._chat_completion_content(body)
-        if not content:
-            return None, "memory_sentinel_empty_response"
-        try:
-            return self._parse_memory_sentinel_response(content), None
-        except ValueError as exc:
-            return None, f"memory_sentinel_parse_failed:{exc}"
-
-    def _parse_memory_sentinel_response(self, content: str) -> dict[str, Any]:
-        text = str(content or "").strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
-            text = re.sub(r"\s*```$", "", text).strip()
-        if not text.startswith("{"):
-            start = text.find("{")
-            end = text.rfind("}")
-            if start >= 0 and end > start:
-                text = text[start : end + 1]
-        try:
-            raw = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise ValueError("invalid_json") from exc
-        if not isinstance(raw, dict):
-            raise ValueError("json_root_not_object")
-        route = str(raw.get("route") or "").strip().lower()
-        if route not in {"search", "tone_only", "skip"}:
-            raise ValueError("invalid_route")
-        return {
-            "route": route,
-            "reason": self._clip_text(str(raw.get("reason") or ""), 160),
-            "anchors": self._normalize_planner_terms(raw.get("anchors"))[:6],
-            "confidence": self._clamp(self._safe_float(raw.get("confidence"), 0.0)),
-        }
 
     def _domain_sentinel_rule_plan(self, query: str) -> dict[str, Any]:
         text = str(query or "")

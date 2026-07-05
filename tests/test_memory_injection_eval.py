@@ -212,7 +212,6 @@ def test_gateway_recall_eval_endpoint_runs_expect_none_without_upstream(
         **cfg["gateway"],
         "current_inner_state_interval_rounds": 0,
         "memory_sentinel_enabled": True,
-        "memory_sentinel_llm_enabled": False,
         "recalled_memory_budget": 500,
         "related_memory_budget": 500,
         "recent_context_budget": 300,

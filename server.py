@@ -11273,9 +11273,6 @@ async def api_config_get(request):
             "recalled_memory_budget": gateway_cfg.get("recalled_memory_budget", 400),
             "related_memory_budget": gateway_cfg.get("related_memory_budget", 220),
             "memory_sentinel_enabled": _bool_value(gateway_cfg.get("memory_sentinel_enabled"), True),
-            "memory_sentinel_llm_enabled": _bool_value(gateway_cfg.get("memory_sentinel_llm_enabled"), True),
-            "memory_sentinel_model": gateway_cfg.get("memory_sentinel_model", ""),
-            "memory_sentinel_context_turns": gateway_cfg.get("memory_sentinel_context_turns", 3),
             "domain_sentinel_enabled": _bool_value(gateway_cfg.get("domain_sentinel_enabled"), True),
             "domain_sentinel_model": gateway_cfg.get("domain_sentinel_model") or "Qwen/Qwen3-8B",
             "domain_sentinel_base_url": str(gateway_cfg.get("domain_sentinel_base_url") or ""),
@@ -11750,23 +11747,6 @@ async def api_config_update(request):
             gateway_cfg["memory_sentinel_enabled"] = _bool_value(g["memory_sentinel_enabled"], True)
             gateway_hot_update_body["memory_sentinel_enabled"] = gateway_cfg["memory_sentinel_enabled"]
             updated.append("gateway.memory_sentinel_enabled")
-        if "memory_sentinel_llm_enabled" in g:
-            gateway_cfg["memory_sentinel_llm_enabled"] = _bool_value(g["memory_sentinel_llm_enabled"], True)
-            gateway_hot_update_body["memory_sentinel_llm_enabled"] = gateway_cfg["memory_sentinel_llm_enabled"]
-            updated.append("gateway.memory_sentinel_llm_enabled")
-        if "memory_sentinel_model" in g:
-            gateway_cfg["memory_sentinel_model"] = str(g["memory_sentinel_model"] or "").strip()
-            gateway_hot_update_body["memory_sentinel_model"] = gateway_cfg["memory_sentinel_model"]
-            updated.append("gateway.memory_sentinel_model")
-        if "memory_sentinel_context_turns" in g:
-            gateway_cfg["memory_sentinel_context_turns"] = _int_between(
-                g["memory_sentinel_context_turns"],
-                3,
-                0,
-                8,
-            )
-            gateway_hot_update_body["memory_sentinel_context_turns"] = gateway_cfg["memory_sentinel_context_turns"]
-            updated.append("gateway.memory_sentinel_context_turns")
         if "domain_sentinel_enabled" in g:
             gateway_cfg["domain_sentinel_enabled"] = _bool_value(g["domain_sentinel_enabled"], True)
             gateway_hot_update_body["domain_sentinel_enabled"] = gateway_cfg["domain_sentinel_enabled"]
@@ -12258,22 +12238,6 @@ async def api_config_update(request):
                     sc_gateway["memory_sentinel_enabled"] = _bool_value(
                         body["gateway"]["memory_sentinel_enabled"],
                         True,
-                    )
-                if "memory_sentinel_llm_enabled" in body["gateway"]:
-                    sc_gateway["memory_sentinel_llm_enabled"] = _bool_value(
-                        body["gateway"]["memory_sentinel_llm_enabled"],
-                        True,
-                    )
-                if "memory_sentinel_model" in body["gateway"]:
-                    sc_gateway["memory_sentinel_model"] = str(
-                        body["gateway"]["memory_sentinel_model"] or ""
-                    ).strip()
-                if "memory_sentinel_context_turns" in body["gateway"]:
-                    sc_gateway["memory_sentinel_context_turns"] = _int_between(
-                        body["gateway"]["memory_sentinel_context_turns"],
-                        3,
-                        0,
-                        8,
                     )
                 if "domain_sentinel_enabled" in body["gateway"]:
                     sc_gateway["domain_sentinel_enabled"] = _bool_value(

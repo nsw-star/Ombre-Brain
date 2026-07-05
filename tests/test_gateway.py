@@ -1079,8 +1079,6 @@ def test_gateway_config_endpoint_updates_memory_cooldown(monkeypatch, test_confi
         recalled_memory_budget=400,
         related_memory_budget=220,
         memory_sentinel_enabled=False,
-        memory_sentinel_model="",
-        memory_sentinel_context_turns=3,
         current_inner_state_interval_rounds=15,
         direct_render_mode="auto",
         retrieval_mode="graph",
@@ -1116,9 +1114,6 @@ def test_gateway_config_endpoint_updates_memory_cooldown(monkeypatch, test_confi
                     "recalled_memory_budget": 520,
                     "related_memory_budget": 180,
                     "memory_sentinel_enabled": True,
-                    "memory_sentinel_llm_enabled": False,
-                    "memory_sentinel_model": "sentinel-mini",
-                    "memory_sentinel_context_turns": 2,
                     "semantic_candidate_top_k": 64,
                     "moment_search_limit": 55,
                     "current_inner_state_interval_rounds": 9,
@@ -1165,9 +1160,6 @@ def test_gateway_config_endpoint_updates_memory_cooldown(monkeypatch, test_confi
         "gateway.recent_context_reentry_idle_hours",
         "gateway.recent_context_budget",
         "gateway.memory_sentinel_enabled",
-        "gateway.memory_sentinel_llm_enabled",
-        "gateway.memory_sentinel_model",
-        "gateway.memory_sentinel_context_turns",
         "gateway.recalled_memory_budget",
         "gateway.related_memory_budget",
         "gateway.semantic_candidate_top_k",
@@ -1209,9 +1201,6 @@ def test_gateway_config_endpoint_updates_memory_cooldown(monkeypatch, test_confi
     assert service.recalled_budget == 520
     assert service.related_memory_budget == 180
     assert service.memory_sentinel_enabled is True
-    assert service.memory_sentinel_llm_enabled is False
-    assert service.memory_sentinel_model == "sentinel-mini"
-    assert service.memory_sentinel_context_turns == 2
     assert service.semantic_candidate_top_k == 64
     assert service.moment_search_limit == 55
     assert service.current_inner_state_interval_rounds == 9
@@ -1258,9 +1247,9 @@ def test_gateway_config_endpoint_updates_memory_cooldown(monkeypatch, test_confi
     assert response.json()["gateway"]["recalled_memory_budget"] == 520
     assert response.json()["gateway"]["related_memory_budget"] == 180
     assert response.json()["gateway"]["memory_sentinel_enabled"] is True
-    assert response.json()["gateway"]["memory_sentinel_llm_enabled"] is False
-    assert response.json()["gateway"]["memory_sentinel_model"] == "sentinel-mini"
-    assert response.json()["gateway"]["memory_sentinel_context_turns"] == 2
+    assert "memory_sentinel_llm_enabled" not in response.json()["gateway"]
+    assert "memory_sentinel_model" not in response.json()["gateway"]
+    assert "memory_sentinel_context_turns" not in response.json()["gateway"]
     assert response.json()["gateway"]["semantic_candidate_top_k"] == 64
     assert response.json()["gateway"]["moment_search_limit"] == 55
     assert response.json()["gateway"]["current_inner_state_interval_rounds"] == 9
@@ -1298,7 +1287,7 @@ def test_gateway_query_planner_defaults_to_dehydration_model(monkeypatch, test_c
     assert captured == []
 
 
-def test_gateway_memory_sentinel_llm_defaults_off(monkeypatch, test_config, bucket_mgr):
+def test_gateway_memory_sentinel_rule_sentinel_defaults_on(monkeypatch, test_config, bucket_mgr):
     _, service, _, _ = _build_service(
         monkeypatch,
         _gateway_config(test_config),
@@ -1306,10 +1295,10 @@ def test_gateway_memory_sentinel_llm_defaults_off(monkeypatch, test_config, buck
     )
 
     assert service.memory_sentinel_enabled is True
-    assert service.memory_sentinel_llm_enabled is False
+    assert not hasattr(service, "memory_sentinel_llm_enabled")
 
 
-def test_gateway_memory_sentinel_hard_signal_bypasses_model(monkeypatch, test_config, bucket_mgr):
+def test_gateway_memory_sentinel_hard_signal_bypasses_rule_route(monkeypatch, test_config, bucket_mgr):
     temple_id = _create_bucket(
         bucket_mgr,
         content="海边神庙那次，小雨说风从石阶下面吹上来。",
@@ -1322,13 +1311,6 @@ def test_gateway_memory_sentinel_hard_signal_bypasses_model(monkeypatch, test_co
         bucket_mgr,
         embedding_results=[(temple_id, 0.96)],
     )
-    calls = []
-
-    async def fail_if_called(query, turns):
-        calls.append({"query": query, "turns": turns})
-        return {"route": "skip", "reason": "should not run", "anchors": [], "confidence": 1.0}, None
-
-    monkeypatch.setattr(service, "_call_memory_sentinel", fail_if_called)
 
     _payload, _recalled_ids, debug = _run(
         service.prepare_payload(
@@ -1338,7 +1320,6 @@ def test_gateway_memory_sentinel_hard_signal_bypasses_model(monkeypatch, test_co
         )
     )
 
-    assert calls == []
     assert debug["memory_sentinel_debug"]["called"] is False
     assert debug["memory_sentinel_debug"]["hard_bypass_reason"]
 
@@ -1366,16 +1347,6 @@ def test_gateway_memory_sentinel_tone_only_skips_dynamic_and_recent_context(
         assistant_text="我记得。",
     )
 
-    async def tone_only(query, turns):
-        return {
-            "route": "tone_only",
-            "reason": "affection without concrete anchor",
-            "anchors": [],
-            "confidence": 0.9,
-        }, None
-
-    monkeypatch.setattr(service, "_call_memory_sentinel", tone_only)
-
     payload, recalled_ids, debug = _run(
         service.prepare_payload(
             {"messages": [{"role": "user", "content": "想你了抱抱"}]},
@@ -1394,7 +1365,7 @@ def test_gateway_memory_sentinel_tone_only_skips_dynamic_and_recent_context(
     assert debug["query_planner_debug"]["skip_reason"] == "memory_sentinel_tone_only"
 
 
-def test_gateway_memory_sentinel_searchable_residue_bypasses_model(
+def test_gateway_memory_sentinel_searchable_residue_bypasses_rule_route(
     monkeypatch, test_config, bucket_mgr
 ):
     bucket_id = _create_bucket(
@@ -1418,13 +1389,6 @@ def test_gateway_memory_sentinel_searchable_residue_bypasses_model(
         embedding_results=[],
     )
     monkeypatch.setattr(service, "_admit_bucket_for_recall", lambda query, item: True)
-    calls = []
-
-    async def fail_if_called(query, turns):
-        calls.append({"query": query, "turns": turns})
-        return {"route": "skip", "reason": "should not run", "anchors": [], "confidence": 1.0}, None
-
-    monkeypatch.setattr(service, "_call_memory_sentinel", fail_if_called)
 
     payload, recalled_ids, debug = _run(
         service.prepare_payload(
@@ -1434,7 +1398,6 @@ def test_gateway_memory_sentinel_searchable_residue_bypasses_model(
         )
     )
 
-    assert calls == []
     assert bucket_id in recalled_ids
     assert "一起听歌方案" in _joined_message_content(payload["messages"])
     assert debug["memory_sentinel_debug"]["called"] is False
@@ -1461,7 +1424,6 @@ def test_gateway_generic_status_query_has_no_locatable_residue(
             current_inner_state_interval_rounds=0,
             relationship_weather_interval_rounds=0,
             favorite_memory_interval_rounds=0,
-            memory_sentinel_llm_enabled=False,
         ),
         bucket_mgr,
         embedding_results=[(bucket_id, 0.99)],
@@ -1508,18 +1470,6 @@ def test_gateway_memory_sentinel_checkin_does_not_exact_bypass(
         user_text="刚才在说天气。",
         assistant_text="我在。",
     )
-    calls = []
-
-    async def tone_only(query, turns):
-        calls.append({"query": query, "turns": turns})
-        return {
-            "route": "tone_only",
-            "reason": "status check-in without memory anchor",
-            "anchors": [],
-            "confidence": 0.92,
-        }, None
-
-    monkeypatch.setattr(service, "_call_memory_sentinel", tone_only)
 
     payload, recalled_ids, debug = _run(
         service.prepare_payload(
@@ -1530,7 +1480,6 @@ def test_gateway_memory_sentinel_checkin_does_not_exact_bypass(
     )
     injected = _joined_message_content(payload["messages"])
 
-    assert calls == []
     assert recalled_ids == []
     assert "Recalled Memory" not in injected
     assert "Diffused Memory" not in injected
@@ -1556,11 +1505,6 @@ def test_gateway_memory_sentinel_skip_blocks_low_signal_recall(monkeypatch, test
         embedding_results=[(bucket_id, 0.99)],
     )
 
-    async def skip(query, turns):
-        return {"route": "skip", "reason": "ack only", "anchors": [], "confidence": 0.95}, None
-
-    monkeypatch.setattr(service, "_call_memory_sentinel", skip)
-
     payload, recalled_ids, debug = _run(
         service.prepare_payload(
             {"messages": [{"role": "user", "content": "哈哈"}]},
@@ -1575,206 +1519,6 @@ def test_gateway_memory_sentinel_skip_blocks_low_signal_recall(monkeypatch, test
     assert debug["memory_sentinel_debug"]["rule_route"] is True
     assert debug["memory_sentinel_debug"]["route"] == "skip"
     assert debug["query_planner_debug"]["skip_reason"] == "memory_sentinel_skip"
-
-
-def test_gateway_memory_sentinel_search_uses_recent_turns_for_vague_followup(
-    monkeypatch, test_config, bucket_mgr
-):
-    hospital_id = _create_bucket(
-        bucket_mgr,
-        content="小雨住院那次，后来医生说可以先观察，第二天再确认结果。",
-        name="住院后续",
-        hours_ago=48,
-        keywords=["住院", "医生", "结果"],
-    )
-    _, service, state_store, _ = _build_service(
-        monkeypatch,
-        _gateway_config(
-            test_config,
-            memory_sentinel_llm_enabled=True,
-            recent_context_budget=0,
-            current_inner_state_interval_rounds=0,
-            first_card_min_score=0.35,
-        ),
-        bucket_mgr,
-        embedding_results={"后来呢": [(hospital_id, 0.95)]},
-    )
-    monkeypatch.setattr(service, "_admit_bucket_for_recall", lambda query, item: True)
-    state_store.record_conversation_turn(
-        profile_id="haven_xiaoyu",
-        session_id="sess-sentinel-followup",
-        round_id=1,
-        user_text="我当时住院检查，医生说要等结果。",
-        assistant_text="嗯，我陪你等。",
-    )
-    calls = []
-
-    async def search(query, turns):
-        calls.append({"query": query, "turns": turns})
-        return {
-            "route": "search",
-            "reason": "vague followup refers to recent hospital turn",
-            "anchors": ["住院", "医生", "结果"],
-            "confidence": 0.88,
-        }, None
-
-    monkeypatch.setattr(service, "_call_memory_sentinel", search)
-
-    payload, recalled_ids, debug = _run(
-        service.prepare_payload(
-            {"messages": [{"role": "user", "content": "后来呢"}]},
-            "sess-sentinel-followup",
-            include_debug=True,
-        )
-    )
-    injected = _joined_message_content(payload["messages"])
-
-    assert calls and "住院检查" in calls[0]["turns"][0]["user_text"]
-    assert recalled_ids == [hospital_id]
-    assert "Recalled Memory" in injected
-    assert "住院后续" in injected
-    assert debug["memory_sentinel_debug"]["route"] == "search"
-    assert debug["memory_sentinel_debug"]["anchors"] == ["住院", "医生", "结果"]
-
-
-def test_gateway_memory_sentinel_llm_disabled_skips_grey_zone_model_call(
-    monkeypatch, test_config, bucket_mgr
-):
-    bucket_id = _create_bucket(
-        bucket_mgr,
-        content="小雨住院那次，后来医生说可以先观察，第二天再确认结果。",
-        name="住院后续",
-        hours_ago=48,
-        keywords=["住院", "医生", "结果"],
-    )
-    _, service, state_store, _ = _build_service(
-        monkeypatch,
-        _gateway_config(
-            test_config,
-            memory_sentinel_llm_enabled=False,
-            recent_context_budget=0,
-            current_inner_state_interval_rounds=0,
-            first_card_min_score=0.35,
-        ),
-        bucket_mgr,
-        embedding_results={"后来呢": [(bucket_id, 0.95)]},
-    )
-    state_store.record_conversation_turn(
-        profile_id="haven_xiaoyu",
-        session_id="sess-sentinel-llm-off",
-        round_id=1,
-        user_text="我当时住院检查，医生说要等结果。",
-        assistant_text="嗯，我陪你等。",
-    )
-    calls = []
-
-    async def fail_if_called(query, turns):
-        calls.append({"query": query, "turns": turns})
-        return {"route": "search", "reason": "should not run", "anchors": ["住院"], "confidence": 1.0}, None
-
-    monkeypatch.setattr(service, "_call_memory_sentinel", fail_if_called)
-
-    _payload, _recalled_ids, debug = _run(
-        service.prepare_payload(
-            {"messages": [{"role": "user", "content": "后来呢"}]},
-            "sess-sentinel-llm-off",
-            include_debug=True,
-        )
-    )
-
-    assert calls == []
-    assert debug["memory_sentinel_debug"]["called"] is False
-    assert debug["memory_sentinel_debug"]["llm_enabled"] is False
-    assert debug["memory_sentinel_debug"]["llm_skipped_reason"] == "memory_sentinel_llm_disabled"
-    assert debug["memory_sentinel_debug"]["route"] == ""
-
-
-def test_gateway_memory_sentinel_llm_disabled_keeps_rule_tone_only(
-    monkeypatch, test_config, bucket_mgr
-):
-    bucket_id = _create_bucket(
-        bucket_mgr,
-        content="小雨上次说想要抱抱时，Haven只需要轻轻接住她。",
-        name="抱抱语气",
-        hours_ago=3,
-    )
-    _, service, _, _ = _build_service(
-        monkeypatch,
-        _gateway_config(
-            test_config,
-            memory_sentinel_llm_enabled=False,
-            current_inner_state_interval_rounds=0,
-        ),
-        bucket_mgr,
-        embedding_results=[(bucket_id, 0.99)],
-    )
-    calls = []
-
-    async def fail_if_called(query, turns):
-        calls.append({"query": query, "turns": turns})
-        return {"route": "search", "reason": "should not run", "anchors": [], "confidence": 1.0}, None
-
-    monkeypatch.setattr(service, "_call_memory_sentinel", fail_if_called)
-
-    payload, recalled_ids, debug = _run(
-        service.prepare_payload(
-            {"messages": [{"role": "user", "content": "想你了抱抱"}]},
-            "sess-sentinel-llm-off-tone",
-            include_debug=True,
-        )
-    )
-
-    assert calls == []
-    assert recalled_ids == []
-    assert "Recalled Memory" not in _joined_message_content(payload["messages"])
-    assert debug["memory_sentinel_debug"]["called"] is False
-    assert debug["memory_sentinel_debug"]["llm_enabled"] is False
-    assert debug["memory_sentinel_debug"]["rule_route"] is True
-    assert debug["memory_sentinel_debug"]["route"] == "tone_only"
-    assert debug["query_planner_debug"]["skip_reason"] == "memory_sentinel_tone_only"
-
-
-def test_gateway_memory_sentinel_failure_falls_back_to_existing_rules(
-    monkeypatch, test_config, bucket_mgr
-):
-    bucket_id = _create_bucket(
-        bucket_mgr,
-        content="小雨那件事激动哭，是因为终于确认自己被认真接住了。",
-        name="激动哭的原因",
-        hours_ago=24,
-    )
-    _, service, _, _ = _build_service(
-        monkeypatch,
-        _gateway_config(
-            test_config,
-            memory_sentinel_llm_enabled=True,
-            recent_context_budget=0,
-            current_inner_state_interval_rounds=0,
-            first_card_min_score=0.35,
-        ),
-        bucket_mgr,
-        embedding_results=[(bucket_id, 0.96)],
-    )
-    monkeypatch.setattr(service, "_admit_bucket_for_recall", lambda query, item: True)
-
-    async def bad_json(query, turns):
-        return None, "memory_sentinel_parse_failed:invalid_json"
-
-    monkeypatch.setattr(service, "_call_memory_sentinel", bad_json)
-
-    payload, recalled_ids, debug = _run(
-        service.prepare_payload(
-            {"messages": [{"role": "user", "content": "那件事为什么让我激动哭"}]},
-            "sess-sentinel-fallback",
-            include_debug=True,
-        )
-    )
-
-    assert recalled_ids == [bucket_id]
-    assert "激动哭的原因" in _joined_message_content(payload["messages"])
-    assert debug["memory_sentinel_debug"]["called"] is True
-    assert debug["memory_sentinel_debug"]["fallback_used"] is True
-    assert debug["memory_sentinel_debug"]["errors"] == ["memory_sentinel_parse_failed:invalid_json"]
 
 
 def test_gateway_default_disables_pre_reply_persona(monkeypatch, test_config, bucket_mgr):

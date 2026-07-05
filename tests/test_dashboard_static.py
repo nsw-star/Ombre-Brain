@@ -404,7 +404,7 @@ def test_dashboard_exposes_gateway_memory_cooldown_settings():
     assert 'id="cfg-operit-context-rewrite-enabled"' in html
     assert 'id="cfg-word-map-hint-enabled"' in html
     assert 'id="cfg-query-planner-enabled"' in html
-    assert 'id="cfg-memory-sentinel-llm-enabled"' in html
+    assert 'id="cfg-memory-sentinel-llm-enabled"' not in html
     assert 'id="cfg-domain-sentinel-enabled"' in html
     assert 'id="cfg-domain-sentinel-model"' in html
     assert 'id="cfg-domain-sentinel-url"' in html
@@ -432,7 +432,7 @@ def test_dashboard_exposes_gateway_memory_cooldown_settings():
     assert "cfg.gateway.operit_context_rewrite_enabled" in html
     assert "cfg.gateway.word_map_hint_enabled" in html
     assert "cfg.gateway.query_planner_enabled" in html
-    assert "cfg.gateway.memory_sentinel_llm_enabled" in html
+    assert "cfg.gateway.memory_sentinel_llm_enabled" not in html
     assert "cfg.gateway.domain_sentinel_enabled" in html
     assert "cfg.gateway.domain_sentinel_model" in html
     assert "cfg.gateway.domain_sentinel_base_url" in html
@@ -457,7 +457,7 @@ def test_dashboard_exposes_gateway_memory_cooldown_settings():
     assert "operit_context_rewrite_enabled: document.getElementById('cfg-operit-context-rewrite-enabled').value === 'true'," in html
     assert "word_map_hint_enabled: document.getElementById('cfg-word-map-hint-enabled').value === 'true'," in html
     assert "query_planner_enabled: document.getElementById('cfg-query-planner-enabled').value === 'true'," in html
-    assert "memory_sentinel_llm_enabled: document.getElementById('cfg-memory-sentinel-llm-enabled').value === 'true'," in html
+    assert "memory_sentinel_llm_enabled:" not in html
     assert "domain_sentinel_enabled: document.getElementById('cfg-domain-sentinel-enabled').value === 'true'," in html
     assert "domain_sentinel_model: document.getElementById('cfg-domain-sentinel-model').value," in html
     assert "domain_sentinel_base_url: document.getElementById('cfg-domain-sentinel-url').value," in html
