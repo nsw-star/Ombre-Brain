@@ -7825,6 +7825,12 @@ async function saveConfig(persist, persistEnv) {
     persist_env: !!persistEnv,
   };
   var forceSections = {};
+  if (persist) {
+    // Persist writes should mirror the visible tab even if runtime state already changed.
+    Object.keys(candidate).forEach(function(sectionName) {
+      forceSections[sectionName] = true;
+    });
+  }
   if (activeTarget === 'memory-config') {
     forceSections.gateway = true;
     forceSections.recall = true;

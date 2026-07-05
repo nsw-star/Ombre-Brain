@@ -483,6 +483,9 @@ def test_dashboard_config_save_sends_changed_sections_and_forces_memory_panel():
     assert "if (force) {" in save_block
     assert "var activeTarget = activeTab ? activeTab.dataset.tab : '';" in save_block
     assert "var body = {" in save_block
+    assert "if (persist) {" in save_block
+    assert "Object.keys(candidate).forEach(function(sectionName) {" in save_block
+    assert "forceSections[sectionName] = true;" in save_block
     assert "forceSections.gateway = true;" in save_block
     assert "forceSections.recall = true;" in save_block
     assert "forceSections.memory_diffusion = true;" in save_block
