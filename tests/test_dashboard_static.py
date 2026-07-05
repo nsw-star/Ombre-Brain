@@ -654,6 +654,9 @@ def test_dashboard_exposes_gateway_upstream_editor():
     assert "function collectGatewayUpstreamsForSave(includeKeyValues)" in html
     assert "gatewayUpstreams = (((cfg.gateway || {}).upstreams) || []).map(normalizeGatewayUpstream);" in load_block
     assert "var keyValuesText = upstream.api_key_values.join('\\n');" in html
+    assert "var apiKeyValues = Array.isArray(raw.api_key_values)" in html
+    assert "api_key_values: apiKeyValues.map(function(item) { return String(item || '').trim(); }).filter(Boolean)," in html
+    assert "api_key_values: []," not in html
     assert "function updateGatewayKeyValueCount(index)" in html
     assert "updateGatewayKeyValueCount(index);" in html
     assert 'oninput="updateGatewayKeyValueCount(' in html

@@ -7250,12 +7250,15 @@ function normalizeGatewayModelEntry(item) {
 function normalizeGatewayUpstream(raw) {
   raw = raw || {};
   var models = Array.isArray(raw.models) ? raw.models.map(normalizeGatewayModelEntry) : [];
+  var apiKeyValues = Array.isArray(raw.api_key_values)
+    ? raw.api_key_values
+    : (typeof raw.api_key_values === 'string' ? raw.api_key_values.split(/\r?\n/) : []);
   return {
     name: String(raw.name || '').trim(),
     protocol: String(raw.protocol || 'openai').trim() || 'openai',
     base_url: String(raw.base_url || '').trim(),
     api_key_envs: Array.isArray(raw.api_key_envs) ? raw.api_key_envs.map(String).filter(Boolean) : [],
-    api_key_values: [],
+    api_key_values: apiKeyValues.map(function(item) { return String(item || '').trim(); }).filter(Boolean),
     has_direct_api_key: !!raw.has_direct_api_key,
     key_count: raw.key_count || 0,
     ready: !!raw.ready,
