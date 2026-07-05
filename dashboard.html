@@ -5313,8 +5313,9 @@ function updateStats() {
   const feels = allBuckets.filter(b => b.type === 'feel').length;
   const resolved = allBuckets.filter(b => b.resolved).length;
   const digested = allBuckets.filter(b => b.digested).length;
+  const archived = allBuckets.filter(b => b.type === 'archived').length;
   document.getElementById('stats').textContent =
-    total + ' 桶 · ' + pinned + ' 钉选 · ' + anchors + ' anchor · ' + feels + ' feel · ' + resolved + ' 不浮现 · ' + digested + ' 已消化';
+    total + ' 桶 · ' + pinned + ' 钉选 · ' + anchors + ' anchor · ' + feels + ' feel · ' + resolved + ' 已沉底 · ' + digested + ' 已消化 · ' + archived + ' 归档';
 }
 
 function buildFilters() {
