@@ -28,12 +28,14 @@ class ReminderStore:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=5.0)
+        conn.execute("PRAGMA busy_timeout=5000")
         conn.row_factory = sqlite3.Row
         return conn
 
     def _init_db(self) -> None:
         conn = self._connect()
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS reminders (
@@ -163,8 +165,9 @@ class ReminderStore:
         finally:
             conn.close()
 
-    def list(self, *, status: str = "active", limit: int = 50) -> list[dict]:
-        self.archive_expired()
+    def list(self, *, status: str = "active", limit: int = 50, archive: bool = True) -> list[dict]:
+        if archive:
+            self.archive_expired()
         status = str(status or "active").strip().lower()
         params: list[Any] = []
         where = []
@@ -213,7 +216,7 @@ class ReminderStore:
             for item in (channels or [safe_channel])
             if str(item or "").strip()
         ] or [safe_channel]
-        rows = self.list(status="active", limit=200)
+        rows = self.list(status="active", limit=200, archive=False)
         due_rows = [
             row
             for row in rows
@@ -382,7 +385,9 @@ class ReminderStore:
         safe_now = self._coerce_now(now)
         conn = self._connect()
         try:
-            rows = conn.execute("SELECT * FROM reminders WHERE status = 'active'").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM reminders WHERE status = 'active' AND end_at IS NOT NULL AND end_at != ''"
+            ).fetchall()
             expired_ids = []
             for row in rows:
                 item = self._row_to_dict(row)

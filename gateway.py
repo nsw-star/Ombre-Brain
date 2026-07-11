@@ -3680,6 +3680,13 @@ class GatewayService:
                 session_id,
             )
             return
+        if not self._assistant_message_has_output(assistant_message):
+            logger.warning(
+                "Gateway round bookkeeping skipped | session=%s route=%s reason=no_assistant_output",
+                session_id,
+                route,
+            )
+            return
         round_id = self.state_store.record_success(session_id, recalled_ids)
         if injection_debug and injection_debug.get("recent_context_injected"):
             try:
@@ -3752,6 +3759,21 @@ class GatewayService:
             round_id,
             recalled_ids,
         )
+
+    @staticmethod
+    def _assistant_message_has_output(assistant_message: dict[str, Any] | None) -> bool:
+        if not isinstance(assistant_message, dict):
+            return False
+        content = assistant_message.get("content")
+        if isinstance(content, str) and content.strip():
+            return True
+        if isinstance(content, list) and content:
+            return True
+        reasoning = assistant_message.get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning.strip():
+            return True
+        tool_calls = assistant_message.get("tool_calls")
+        return isinstance(tool_calls, list) and bool(tool_calls)
 
     def _record_conversation_turn(
         self,
@@ -9034,6 +9056,15 @@ class GatewayService:
         if not source_buckets:
             return items, []
 
+        candidate_buckets = [
+            item.get("bucket")
+            for item in items
+            if isinstance(item, dict) and isinstance(item.get("bucket"), dict)
+        ]
+        embedding_by_id = await self._semantic_session_dedupe_embeddings(
+            source_buckets + candidate_buckets
+        )
+
         kept: list[dict] = []
         suppressed: list[dict] = []
         for item in items:
@@ -9042,7 +9073,11 @@ class GatewayService:
             if not bucket_id or not isinstance(bucket, dict) or self._session_semantic_dedupe_bypass(query, item):
                 kept.append(item)
                 continue
-            match = await self._semantic_session_dedupe_match(bucket, source_buckets)
+            match = await self._semantic_session_dedupe_match(
+                bucket,
+                source_buckets,
+                embedding_by_id=embedding_by_id,
+            )
             if not match:
                 kept.append(item)
                 continue
@@ -9068,13 +9103,19 @@ class GatewayService:
         self,
         candidate_bucket: dict,
         source_buckets: list[dict],
+        *,
+        embedding_by_id: dict[str, list[float]] | None = None,
     ) -> dict[str, Any] | None:
         candidate_id = str(candidate_bucket.get("id") or "")
         for source_bucket in source_buckets:
             source_id = str(source_bucket.get("id") or "")
             if not source_id or source_id == candidate_id:
                 continue
-            similarity = await self._bucket_session_similarity(candidate_bucket, source_bucket)
+            similarity = await self._bucket_session_similarity(
+                candidate_bucket,
+                source_bucket,
+                embedding_by_id=embedding_by_id,
+            )
             if not similarity:
                 continue
             threshold = (
@@ -9090,8 +9131,18 @@ class GatewayService:
                 }
         return None
 
-    async def _bucket_session_similarity(self, left: dict, right: dict) -> dict[str, Any] | None:
-        embedding_similarity = await self._stored_bucket_embedding_similarity(left, right)
+    async def _bucket_session_similarity(
+        self,
+        left: dict,
+        right: dict,
+        *,
+        embedding_by_id: dict[str, list[float]] | None = None,
+    ) -> dict[str, Any] | None:
+        embedding_similarity = await self._stored_bucket_embedding_similarity(
+            left,
+            right,
+            embedding_by_id=embedding_by_id,
+        )
         lexical_similarity = self._bucket_lexical_session_similarity(left, right)
         best: dict[str, Any] | None = None
         if embedding_similarity is not None:
@@ -9102,22 +9153,60 @@ class GatewayService:
             best = {"similarity": round(lexical_similarity, 4), "method": "lexical"}
         return best
 
-    async def _stored_bucket_embedding_similarity(self, left: dict, right: dict) -> float | None:
-        get_embedding = getattr(self.embedding_engine, "get_embedding", None)
-        if not callable(get_embedding):
-            return None
+    async def _semantic_session_dedupe_embeddings(self, buckets: list[dict]) -> dict[str, list[float]]:
+        bucket_ids = list(
+            dict.fromkeys(
+                str(bucket.get("id") or "")
+                for bucket in buckets
+                if isinstance(bucket, dict) and str(bucket.get("id") or "").strip()
+            )
+        )
+        if not bucket_ids:
+            return {}
+        get_embeddings = getattr(self.embedding_engine, "get_embeddings", None)
+        try:
+            if callable(get_embeddings):
+                result = await get_embeddings(bucket_ids)
+                return result if isinstance(result, dict) else {}
+            get_embedding = getattr(self.embedding_engine, "get_embedding", None)
+            if not callable(get_embedding):
+                return {}
+            values = await asyncio.gather(*(get_embedding(bucket_id) for bucket_id in bucket_ids))
+        except Exception as exc:
+            logger.debug("Gateway semantic session dedupe embedding batch lookup failed: %s", exc)
+            return {}
+        return {
+            bucket_id: embedding
+            for bucket_id, embedding in zip(bucket_ids, values)
+            if isinstance(embedding, list) and embedding
+        }
+
+    async def _stored_bucket_embedding_similarity(
+        self,
+        left: dict,
+        right: dict,
+        *,
+        embedding_by_id: dict[str, list[float]] | None = None,
+    ) -> float | None:
         left_id = str(left.get("id") or "")
         right_id = str(right.get("id") or "")
         if not left_id or not right_id:
             return None
-        try:
-            left_embedding, right_embedding = await asyncio.gather(
-                get_embedding(left_id),
-                get_embedding(right_id),
-            )
-        except Exception as exc:
-            logger.debug("Gateway semantic session dedupe embedding lookup failed: %s", exc)
-            return None
+        if embedding_by_id is not None:
+            left_embedding = embedding_by_id.get(left_id)
+            right_embedding = embedding_by_id.get(right_id)
+        else:
+            get_embedding = getattr(self.embedding_engine, "get_embedding", None)
+            if not callable(get_embedding):
+                return None
+            try:
+                left_embedding, right_embedding = await asyncio.gather(
+                    get_embedding(left_id),
+                    get_embedding(right_id),
+                )
+            except Exception as exc:
+                logger.debug("Gateway semantic session dedupe embedding lookup failed: %s", exc)
+                return None
         if not left_embedding or not right_embedding:
             return None
         return self._clamp(EmbeddingEngine._cosine_similarity(left_embedding, right_embedding))
@@ -16096,6 +16185,31 @@ class GatewayService:
             or item.get("distinctive_anchor_match")
         )
 
+    def _item_has_high_confidence_direct_semantic_evidence(self, item: dict) -> bool:
+        if not isinstance(item, dict):
+            return False
+        semantic_score = self._safe_float(item.get("semantic_score"), 0.0)
+        final_value = item.get("score")
+        if final_value is None:
+            final_value = item.get("combined_score")
+        final_score = self._safe_float(final_value, 0.0)
+        semantic_threshold = max(
+            self.high_confidence_semantic_score,
+            self.recall_admission_semantic_score,
+        )
+        final_threshold = max(self.first_card_min_score, semantic_threshold)
+        if semantic_score < semantic_threshold or final_score < final_threshold:
+            return False
+        item["recall_policy_debug"] = {
+            **(item.get("recall_policy_debug") if isinstance(item.get("recall_policy_debug"), dict) else {}),
+            "tech_domain_high_confidence_semantic_bypass": True,
+            "tech_domain_semantic_score": round(semantic_score, 4),
+            "tech_domain_final_score": round(final_score, 4),
+            "tech_domain_semantic_threshold": round(semantic_threshold, 4),
+            "tech_domain_final_threshold": round(final_threshold, 4),
+        }
+        return True
+
     def _tech_domain_recall_rejection(
         self,
         query: str,
@@ -16104,6 +16218,8 @@ class GatewayService:
         node: dict | None = None,
     ) -> dict[str, Any] | None:
         if self._item_has_direct_tech_evidence(item):
+            return None
+        if self._item_has_high_confidence_direct_semantic_evidence(item):
             return None
         if self._query_has_tech_recall_anchor(query):
             return None
