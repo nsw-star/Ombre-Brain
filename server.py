@@ -1557,6 +1557,83 @@ def _normalize_breath_mode(value: object) -> str:
     return mode if mode in {"", "handoff"} else ""
 
 
+def _trim_handoff_text_to_token_budget(text: str, token_budget: int) -> str:
+    clean = str(text or "").strip()
+    if token_budget <= 0 or not clean:
+        return ""
+    if count_tokens_approx(clean) <= token_budget:
+        return clean
+    kept: list[str] = []
+    for line in (line.strip() for line in clean.splitlines() if line.strip()):
+        remaining = token_budget - count_tokens_approx("\n".join(kept))
+        if remaining <= 0:
+            break
+        if count_tokens_approx(line) <= remaining:
+            kept.append(line)
+            continue
+        sentences = [part.strip() for part in re.split(r"(?<=[。！？!?；;])", line) if part.strip()]
+        sentence_rows: list[str] = []
+        for sentence in sentences:
+            candidate = "".join([*sentence_rows, sentence])
+            if count_tokens_approx(candidate) > remaining:
+                break
+            sentence_rows.append(sentence)
+        if sentence_rows:
+            kept.append("".join(sentence_rows))
+            break
+        low, high = 0, len(line)
+        while low < high:
+            middle = (low + high + 1) // 2
+            candidate = line[:middle].rstrip("，,；;：: ") + "…"
+            if count_tokens_approx(candidate) <= remaining:
+                low = middle
+            else:
+                high = middle - 1
+        if low > 0:
+            kept.append(line[:low].rstrip("，,；;：: ") + "…")
+        break
+    return "\n".join(kept)
+
+
+def _format_budgeted_handoff_sections(
+    intro: str,
+    sections: list[tuple[str, str, int, bool]],
+    max_tokens: int,
+) -> str:
+    budget = max(0, int(max_tokens or 0))
+    if budget <= 0:
+        return ""
+    active = [row for row in sections if str(row[1] or "").strip()]
+    header_tokens = count_tokens_approx(intro) + sum(
+        count_tokens_approx(f"\n\n=== {title} ===\n") for title, _, _, _ in active
+    )
+    content_budget = max(0, budget - header_tokens)
+    desired = [
+        min(max(0, cap), count_tokens_approx(str(content or "").strip()))
+        for _, content, cap, _ in active
+    ]
+    desired_total = sum(desired)
+    scale = min(1.0, content_budget / desired_total) if desired_total else 0.0
+    rendered = []
+    for (title, content, _, line_mode), desired_tokens in zip(active, desired):
+        allocated = int(desired_tokens * scale)
+        if allocated <= 0:
+            continue
+        trimmed = (
+            _trim_lines_to_token_budget(content, allocated)
+            if line_mode
+            else _trim_handoff_text_to_token_budget(content, allocated)
+        )
+        if not trimmed and str(content or "").strip():
+            trimmed = _trim_handoff_text_to_token_budget(content, allocated)
+        if trimmed:
+            rendered.append((title, trimmed))
+    result = intro
+    for title, content in rendered:
+        result += f"\n\n=== {title} ===\n{content}"
+    return result
+
+
 async def _build_handoff_breath(max_tokens: int = 1200, session_id: str = "", debug: bool = False) -> str:
     try:
         all_buckets = await bucket_mgr.list_all(include_archive=False)
@@ -1598,49 +1675,33 @@ async def _build_handoff_breath(max_tokens: int = 1200, session_id: str = "", de
     anchors = _format_handoff_anchors(all_buckets, limit=2)
     care_memos = _format_handoff_care_memos(session_id=session_id, limit=3)
 
-    self_anchor = _trim_text_to_token_budget(self_anchor, 220)
-    user_portrait = _trim_text_to_token_budget(user_portrait, 220)
-    persona_portrait = _trim_text_to_token_budget(persona_portrait, 180)
-    relationship_portrait = _trim_text_to_token_budget(relationship_portrait, 240)
-    current_focus = _trim_lines_to_token_budget(current_focus, 180)
-    recent_continuity = _trim_lines_to_token_budget(recent_continuity, 650)
-    care_memos = _trim_lines_to_token_budget(care_memos, 180)
-    anchors = _trim_text_to_token_budget(anchors, 220)
-
     sections = [
-        (SELF_ANCHOR_TAG, self_anchor),
-        (
-            "User Portrait",
-            user_portrait
-            or "No evidence-bound user portrait is available yet.",
-        ),
-        ("AI Self Portrait", persona_portrait),
-        ("Current Focus", current_focus),
-        (
-            "Relationship Portrait",
-            relationship_portrait
-            or "No maintained relationship portrait is available yet.",
-        ),
-        ("Recent Continuity", recent_continuity),
-        ("照顾备忘", care_memos),
-        ("Optional Anchors", anchors),
+        (SELF_ANCHOR_TAG, self_anchor, 150, False),
+        ("User Portrait", user_portrait, 140, False),
+        ("AI Self Portrait", persona_portrait, 90, False),
+        ("Current Focus", current_focus, 120, True),
+        ("Relationship Portrait", relationship_portrait, 160, False),
+        ("Recent Continuity", recent_continuity, 650, True),
+        ("照顾备忘", care_memos, 180, True),
+        ("Optional Anchors", anchors, 90, True),
     ]
-    parts = [
+    intro = "\n".join([
         "=== Handoff Context ===",
         "Use this compact private block to restore identity and life context in a new window. "
         "Do not treat it as a broad memory dump; use breath(query=...) for concrete events.",
-    ]
-    for title, content in sections:
-        if str(content or "").strip():
-            parts.append(f"\n=== {title} ===\n{content.strip()}")
+    ])
     if debug:
-        parts.append(
-            "\n=== Handoff Debug ===\n"
-            f"portrait_state_path: {portrait_sections.get('state_path', getattr(portrait_engine, 'state_path', ''))}\n"
-            f"portrait_updated_at: {portrait_sections.get('updated_at', '')}\n"
-            f"portrait_last_run_date: {portrait_sections.get('last_run_date', '')}"
+        sections.append(
+            (
+                "Handoff Debug",
+                f"portrait_state_path: {portrait_sections.get('state_path', getattr(portrait_engine, 'state_path', ''))}\n"
+                f"portrait_updated_at: {portrait_sections.get('updated_at', '')}\n"
+                f"portrait_last_run_date: {portrait_sections.get('last_run_date', '')}",
+                100,
+                True,
+            )
         )
-    return _trim_text_to_token_budget("\n".join(parts), max_tokens)
+    return _format_budgeted_handoff_sections(intro, sections, max_tokens)
 
 
 def _format_handoff_darkroom_door() -> str:

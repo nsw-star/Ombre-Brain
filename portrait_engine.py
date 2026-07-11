@@ -11,7 +11,7 @@ from openai import AsyncOpenAI
 
 from identity import identity_names, render_identity_template
 from self_anchor import is_self_anchor_bucket
-from utils import bucket_text_for_embedding, strip_wikilinks
+from utils import bucket_text_for_embedding, count_tokens_approx, strip_wikilinks
 
 logger = logging.getLogger("ombre_brain.portrait")
 
@@ -117,7 +117,7 @@ STABLE_MAINTENANCE_PROMPT_TEMPLATE = """你是 {ai_name} 与 {user_display_name}
 {{
   "stable_maintenance": {{
     "user": {{"action": "rewrite|unchanged", "text": "", "evidence": [], "confidence": 0.82}},
-    "persona": {{"action": "rewrite|unchanged", "text": "", "evidence": [], "confidence": 0.82}},
+    "persona": {{"action": "rewrite|unchanged", "text": "", "evidence": [{{"bucket_id": "self-anchor-id", "role": "self_anchor"}}, {{"bucket_id": "whisper-id", "role": "self_identity"}}], "confidence": 0.82}},
     "relationship": {{"action": "rewrite|unchanged", "text": "", "evidence": [], "confidence": 0.82}}
   }}
 }}
@@ -125,11 +125,13 @@ STABLE_MAINTENANCE_PROMPT_TEMPLATE = """你是 {ai_name} 与 {user_display_name}
 规则：
 - 三个 scope 都必须返回，不能省略。stable_locked=true 时必须 unchanged。
 - 输入里的 required_rewrite_scopes 非空时，那些 scope 已有足够证据但 stable 仍空，必须 rewrite。
-- rewrite 的 text 是该 scope 完整、可直接替换的 stable 段落，最多160字；不是增量，不是事件列表，不是把 mid-term 原句复制过去。
+- rewrite 的 text 是该 scope 完整、可直接替换的 stable 段落，最多160字；不是增量，不是事件列表，不是把 mid-term 原句复制过去。persona 额外限制为最多100 token，优先一至两句。
 - previous stable 已准确且没有实质变化时 unchanged；action=unchanged 时 text 和 evidence 留空。
 - previous stable 为空时，只要 previous mid-term/staging 或本次 daily_patch 已有跨日、重复或明确长期证据，就必须 rewrite，不能因为其他 scope 更醒目而跳过。
 - user 回答“{user_display_name}长期稳定的偏好、边界、工作方式和关心点是什么”。
-- persona 回答“{ai_name}怎样理解自己、稳定选择怎样回应、保留哪些自我边界”。自我锚点可以作为 persona 的长期证据；affection/playful 等事件标签本身不足以证明稳定自我。
+- persona 回答“{ai_name}怎样理解自己、稳定选择怎样回应、保留哪些自我边界”。它只能使用 memory_materials.persona_stable_evidence 里的自我入口与 whisper：自我入口是权威底座；whisper 只有在明确表达跨情境的稳定自我选择、边界或回应方式时才能标为 role=self_identity。被保护、陪伴承诺、亲密感受、当前心情或 affection/playful 事件都不是稳定自我证据。
+- persona rewrite 必须引用至少一条 self_anchor_ids；引用 whisper_ids 时必须在 evidence 中标 role=self_identity。不要复述自我入口已经写明的“名字、新窗口、AI 身份、仍然选择”句子，只写相对它新增的自我理解。关系日记、relationship_weather、persona event 不得支持 persona stable。
+- previous persona stable 若引用了 persona_stable_evidence 之外的材料，或主要在复述自我入口，必须在本次 rewrite；不能用 unchanged 保留旧的混合画像。
 - relationship 回答“这段关系长期怎样被理解、恢复和维护”。
 - memory_materials.allowed_scopes 与 evidence_scope_limits 是硬边界；材料不得用于列表外的 scope。relationship_weather / daily_impression 只能支持 relationship，自我锚点只能支持 persona。
 - rewrite 必须带真实 evidence，只能引用输入中已有的 bucket_id / session_id；无证据不得编造。
@@ -799,6 +801,7 @@ class DailyPortraitMaintainer:
             "buckets": bucket_rows,
             "daily_bucket_count": min(len(buckets), limit),
             "evidence_scope_limits": evidence_scope_limits,
+            "persona_stable_evidence": self._persona_stable_evidence_index(all_buckets),
             "persona_events": self._persona_event_materials(persona_engine, start, end, initial=initial),
             "previous_portrait": self._portrait_snapshot(state),
         }
@@ -886,6 +889,7 @@ class DailyPortraitMaintainer:
                 "buckets": materials.get("buckets", []),
                 "persona_events": materials.get("persona_events", []),
                 "evidence_scope_limits": materials.get("evidence_scope_limits", {}),
+                "persona_stable_evidence": materials.get("persona_stable_evidence", {}),
             },
         }
         max_tokens = min(max(self.max_tokens, 1800), 4000)
@@ -960,6 +964,18 @@ class DailyPortraitMaintainer:
                 decided_scopes.add(scope)
                 continue
             if action == "unchanged":
+                if scope == "persona" and not self._persona_stable_state_is_valid(
+                    scope_state,
+                    materials,
+                ):
+                    rejected.append(
+                        {
+                            "key": "stable_maintenance",
+                            "reason": "persona_stable_requires_rewrite",
+                            "item": scope,
+                        }
+                    )
+                    continue
                 if self._scope_requires_stable_seed(
                     scope,
                     scope_state,
@@ -997,9 +1013,126 @@ class DailyPortraitMaintainer:
                     }
                 )
                 continue
+            if scope == "persona":
+                clean, persona_reason = self._normalize_persona_stable_evidence(clean, materials)
+                if not clean:
+                    rejected.append(
+                        {
+                            "key": "stable_maintenance",
+                            "reason": persona_reason,
+                            "item": scope,
+                        }
+                    )
+                    continue
+                clean["text"] = self._trim_text_to_token_budget(clean["text"], 100)
             items.append(clean)
             decided_scopes.add(scope)
         return items, rejected, decided_scopes
+
+    def _persona_stable_evidence_sets(self, materials: dict) -> tuple[set[str], set[str]]:
+        index = materials.get("persona_stable_evidence", {})
+        index = index if isinstance(index, dict) else {}
+        self_anchor_ids = {
+            str(bucket_id or "").strip()
+            for bucket_id in index.get("self_anchor_ids", []) or []
+            if str(bucket_id or "").strip()
+        }
+        whisper_ids = {
+            str(bucket_id or "").strip()
+            for bucket_id in index.get("whisper_ids", []) or []
+            if str(bucket_id or "").strip()
+        }
+        for row in materials.get("buckets", []) or []:
+            if not isinstance(row, dict):
+                continue
+            bucket_id = str(row.get("bucket_id") or "").strip()
+            if not bucket_id:
+                continue
+            if bool(row.get("evergreen")) and set(row.get("allowed_scopes", []) or []) == {"persona"}:
+                self_anchor_ids.add(bucket_id)
+            if "whisper" in {str(tag or "").strip().lower() for tag in row.get("tags", []) or []}:
+                whisper_ids.add(bucket_id)
+        return self_anchor_ids, whisper_ids
+
+    def _normalize_persona_stable_evidence(
+        self,
+        item: dict,
+        materials: dict,
+    ) -> tuple[dict | None, str]:
+        self_anchor_ids, whisper_ids = self._persona_stable_evidence_sets(materials)
+        evidence = []
+        invalid_evidence = False
+        for row in item.get("evidence", []) or []:
+            if not isinstance(row, dict):
+                invalid_evidence = True
+                continue
+            bucket_id = str(row.get("bucket_id") or "").strip()
+            role = str(row.get("role") or "").strip().lower()
+            if bucket_id in self_anchor_ids:
+                evidence.append({"bucket_id": bucket_id, "role": "self_anchor"})
+            elif bucket_id in whisper_ids and role == "self_identity":
+                evidence.append({"bucket_id": bucket_id, "role": "self_identity"})
+            else:
+                invalid_evidence = True
+        if invalid_evidence:
+            return None, "persona_stable_invalid_evidence"
+        evidence = self._dedupe_evidence(evidence)
+        if not evidence:
+            return None, "persona_stable_needs_self_evidence"
+        if self_anchor_ids and not any(row.get("bucket_id") in self_anchor_ids for row in evidence):
+            return None, "persona_stable_needs_self_anchor"
+        clean = dict(item)
+        clean["evidence"] = evidence
+        return clean, ""
+
+    def _persona_stable_state_is_valid(self, scope_state: dict, materials: dict) -> bool:
+        if not str(scope_state.get("stable") or "").strip():
+            return True
+        if str(scope_state.get("stable_source") or "").strip() == "manual":
+            return True
+        self_anchor_ids, whisper_ids = self._persona_stable_evidence_sets(materials)
+        evidence = scope_state.get("stable_evidence", []) or []
+        if not evidence:
+            return False
+        saw_anchor = False
+        for row in evidence:
+            if not isinstance(row, dict):
+                return False
+            bucket_id = str(row.get("bucket_id") or "").strip()
+            role = str(row.get("role") or "").strip().lower()
+            if bucket_id in self_anchor_ids:
+                saw_anchor = True
+                continue
+            if bucket_id in whisper_ids and role == "self_identity":
+                continue
+            return False
+        return saw_anchor if self_anchor_ids else True
+
+    @staticmethod
+    def _trim_text_to_token_budget(text: str, token_budget: int) -> str:
+        clean = str(text or "").strip()
+        if token_budget <= 0 or not clean:
+            return ""
+        if count_tokens_approx(clean) <= token_budget:
+            return clean
+        sentences = [part.strip() for part in re.split(r"(?<=[。！？!?；;])", clean) if part.strip()]
+        kept = []
+        for sentence in sentences:
+            candidate = "".join([*kept, sentence])
+            if count_tokens_approx(candidate) > token_budget:
+                break
+            kept.append(sentence)
+        if kept:
+            return "".join(kept)
+        low, high = 0, len(clean)
+        while low < high:
+            middle = (low + high + 1) // 2
+            candidate = clean[:middle].rstrip("，,；;：: ") + "…"
+            if count_tokens_approx(candidate) <= token_budget:
+                low = middle
+            else:
+                high = middle - 1
+        return clean[:low].rstrip("，,；;：: ") + "…" if low > 0 else ""
 
     def _scope_requires_stable_seed(
         self,
@@ -1012,30 +1145,49 @@ class DailyPortraitMaintainer:
             return False
         if str(scope_state.get("stable") or "").strip():
             return False
-        if str(scope_state.get("mid_term") or "").strip():
-            return True
-        if any(
-            isinstance(row, dict) and row.get("evidence")
-            for row in scope_state.get("staging_pool", []) or []
-        ):
-            return True
+        if scope == "persona":
+            allowed_ids = set().union(*self._persona_stable_evidence_sets(materials))
+            if str(scope_state.get("mid_term") or "").strip() and self._evidence_uses_bucket_ids(
+                scope_state.get("mid_term_evidence", []), allowed_ids
+            ):
+                return True
+            if any(
+                isinstance(row, dict)
+                and self._evidence_uses_bucket_ids(row.get("evidence", []), allowed_ids)
+                for row in scope_state.get("staging_pool", []) or []
+            ):
+                return True
+        else:
+            if str(scope_state.get("mid_term") or "").strip():
+                return True
+            if any(
+                isinstance(row, dict) and row.get("evidence")
+                for row in scope_state.get("staging_pool", []) or []
+            ):
+                return True
         for key in ("move_to_staging", "rewrite_mid_term"):
             if any(
                 isinstance(row, dict)
                 and str(row.get("scope") or "") == scope
                 and row.get("evidence")
+                and (
+                    scope != "persona"
+                    or self._evidence_uses_bucket_ids(
+                        row.get("evidence", []),
+                        set().union(*self._persona_stable_evidence_sets(materials)),
+                    )
+                )
                 for row in daily_patch.get(key, []) or []
             ):
                 return True
-        if scope == "persona":
-            return any(
-                isinstance(row, dict)
-                and bool(row.get("evergreen"))
-                and set(row.get("allowed_scopes", []) or []) == {"persona"}
-                and bool(row.get("bucket_id"))
-                for row in materials.get("buckets", []) or []
-            )
         return False
+
+    @staticmethod
+    def _evidence_uses_bucket_ids(evidence: Any, bucket_ids: set[str]) -> bool:
+        return any(
+            isinstance(row, dict) and str(row.get("bucket_id") or "").strip() in bucket_ids
+            for row in evidence or []
+        )
 
     async def _api_patch(self, date_key: str, state: dict, materials: dict, *, initial: bool) -> dict:
         payload = {
@@ -2053,13 +2205,7 @@ class DailyPortraitMaintainer:
         if not isinstance(scope_state, dict):
             return ""
         stable = str(scope_state.get("stable") or "").strip()
-        mid_term = str(scope_state.get("mid_term") or "").strip()
-        lines = []
-        if stable:
-            lines.append(f"Stable: {self._clip(stable, 160)}")
-        if mid_term and self._norm(mid_term) != self._norm(stable):
-            lines.append(f"Current delta: {self._clip(mid_term, 160)}")
-        return "\n".join(lines)
+        return f"Stable: {self._clip(stable, 160)}" if stable else ""
 
     def _format_recent_activity_block(
         self,
@@ -2416,6 +2562,32 @@ class DailyPortraitMaintainer:
         )
         return rows[:1]
 
+    def _persona_stable_evidence_index(self, all_buckets: list[dict]) -> dict[str, list[str]]:
+        self_anchor_ids = [
+            str(bucket.get("id") or "").strip()
+            for bucket in self._self_anchor_material_buckets(all_buckets)
+            if str(bucket.get("id") or "").strip()
+        ]
+        whisper_ids = []
+        for bucket in all_buckets:
+            if not isinstance(bucket, dict):
+                continue
+            meta = bucket.get("metadata", {}) if isinstance(bucket.get("metadata"), dict) else {}
+            if meta.get("active") is False or meta.get("deprecated") or meta.get("type") == "archived":
+                continue
+            bucket_id = str(bucket.get("id") or "").strip()
+            if not bucket_id:
+                continue
+            if self._is_self_anchor_material(bucket):
+                continue
+            tags = {str(tag or "").strip().lower() for tag in meta.get("tags", []) or []}
+            if "whisper" in tags:
+                whisper_ids.append(bucket_id)
+        return {
+            "self_anchor_ids": list(dict.fromkeys(self_anchor_ids)),
+            "whisper_ids": list(dict.fromkeys(whisper_ids)),
+        }
+
     def _material_allowed_scopes(self, bucket: dict) -> list[str]:
         if self._is_self_anchor_material(bucket):
             return ["persona"]
@@ -2705,6 +2877,9 @@ class DailyPortraitMaintainer:
                         "moment_id": str(item.get("moment_id") or "").strip(),
                         "session_id": str(item.get("session_id") or "").strip(),
                     }
+                    role = str(item.get("role") or "").strip().lower()
+                    if role in {"self_anchor", "self_identity"}:
+                        row["role"] = role
                     rows.append({k: v for k, v in row.items() if v})
         if not rows and (fallback_bucket_id or fallback_session_id):
             row = {
