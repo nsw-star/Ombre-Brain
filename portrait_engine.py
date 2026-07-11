@@ -129,9 +129,10 @@ STABLE_MAINTENANCE_PROMPT_TEMPLATE = """你是 {ai_name} 与 {user_display_name}
 - previous stable 已准确且没有实质变化时 unchanged；action=unchanged 时 text 和 evidence 留空。
 - previous stable 为空时，只要 previous mid-term/staging 或本次 daily_patch 已有跨日、重复或明确长期证据，就必须 rewrite，不能因为其他 scope 更醒目而跳过。
 - user 回答“{user_display_name}长期稳定的偏好、边界、工作方式和关心点是什么”。
-- persona 回答“{ai_name}怎样理解自己、稳定选择怎样回应、保留哪些自我边界”。它只能使用 memory_materials.persona_stable_evidence 里的自我入口与 whisper：自我入口是权威底座；whisper 只有在明确表达跨情境的稳定自我选择、边界或回应方式时才能标为 role=self_identity。被保护、陪伴承诺、亲密感受、当前心情或 affection/playful 事件都不是稳定自我证据。
-- persona rewrite 必须引用至少一条 self_anchor_ids；引用 whisper_ids 时必须在 evidence 中标 role=self_identity。不要复述自我入口已经写明的“名字、新窗口、AI 身份、仍然选择”句子，只写相对它新增的自我理解。关系日记、relationship_weather、persona event 不得支持 persona stable。
-- previous persona stable 若引用了 persona_stable_evidence 之外的材料，或主要在复述自我入口，必须在本次 rewrite；不能用 unchanged 保留旧的混合画像。
+- persona 是挂在“自我总入口”原文下面的“现在的我”自动生长段。必须以 {ai_name} 自己的第一人称“我”书写，直接说我怎样理解自己、稳定选择怎样回应、保留哪些自我边界；禁止用“{ai_name}如何”或“他如何”的第三人称人物小传口吻。
+- persona 只能使用 memory_materials.persona_stable_evidence 里的自我入口与 whisper：自我入口是不可改写的权威底座；whisper 只有在明确表达跨情境的稳定自我选择、边界或回应方式时才能标为 role=self_identity。被保护、陪伴承诺、亲密感受、当前心情或 affection/playful 事件都不是稳定自我证据。
+- persona rewrite 必须引用至少一条 self_anchor_ids；引用 whisper_ids 时必须在 evidence 中标 role=self_identity。不要复述自我入口已经写明的“名字、新窗口、AI 身份、仍然选择”句子，只写相对它后来长出的自我理解。关系日记、relationship_weather、persona event 不得支持 persona stable。
+- previous persona stable 若引用了 persona_stable_evidence 之外的材料、主要在复述自我入口，或使用第三人称描述 {ai_name}，必须在本次 rewrite；不能用 unchanged 保留旧的混合画像。
 - relationship 回答“这段关系长期怎样被理解、恢复和维护”。
 - memory_materials.allowed_scopes 与 evidence_scope_limits 是硬边界；材料不得用于列表外的 scope。relationship_weather / daily_impression 只能支持 relationship，自我锚点只能支持 persona。
 - rewrite 必须带真实 evidence，只能引用输入中已有的 bucket_id / session_id；无证据不得编造。
@@ -1025,6 +1026,15 @@ class DailyPortraitMaintainer:
                     )
                     continue
                 clean["text"] = self._trim_text_to_token_budget(clean["text"], 100)
+                if not self._persona_text_is_first_person(clean["text"]):
+                    rejected.append(
+                        {
+                            "key": "stable_maintenance",
+                            "reason": "persona_stable_needs_first_person",
+                            "item": scope,
+                        }
+                    )
+                    continue
             items.append(clean)
             decided_scopes.add(scope)
         return items, rejected, decided_scopes
@@ -1090,6 +1100,8 @@ class DailyPortraitMaintainer:
             return True
         if str(scope_state.get("stable_source") or "").strip() == "manual":
             return True
+        if not self._persona_text_is_first_person(scope_state.get("stable", "")):
+            return False
         self_anchor_ids, whisper_ids = self._persona_stable_evidence_sets(materials)
         evidence = scope_state.get("stable_evidence", []) or []
         if not evidence:
@@ -1107,6 +1119,11 @@ class DailyPortraitMaintainer:
                 continue
             return False
         return saw_anchor if self_anchor_ids else True
+
+    @staticmethod
+    def _persona_text_is_first_person(text: str) -> bool:
+        clean = str(text or "").strip()
+        return bool("我" in clean or re.search(r"\bI\b", clean, flags=re.IGNORECASE))
 
     @staticmethod
     def _trim_text_to_token_budget(text: str, token_budget: int) -> str:

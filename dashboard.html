@@ -2141,7 +2141,7 @@
   .portrait-state-grid,
   .portrait-candidate-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
   }
   .portrait-candidate-grid {
@@ -2214,6 +2214,27 @@
     padding-top: 10px;
     border-top: 1px solid var(--border);
   }
+  .portrait-self-core,
+  .portrait-self-growth {
+    margin-top: 14px;
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .portrait-self-growth {
+    padding-top: 12px;
+    border-top: 1px solid rgba(168, 147, 132, 0.18);
+  }
+  .portrait-self-growth-label {
+    margin-bottom: 6px;
+    color: var(--text-light);
+    font-size: 10px;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }
+  .portrait-self-growth .portrait-stable-preview { margin-top: 0; }
   .portrait-editor-header {
     margin-bottom: 18px;
   }
@@ -4867,11 +4888,10 @@ function renderPortraitState(data) {
     '<span class="profile-chip">state ' + esc(state.state_path || '—') + '</span>' +
   '</div>';
   content.innerHTML =
-    renderPortraitSelfAnchor(state.self_anchor_entry) +
+    renderPortraitSelfAnchor(state.self_anchor_entry, portrait.persona || {}) +
     renderPortraitCurrentFocus(state.current_focus) +
     '<div class="portrait-state-grid">' +
       renderPortraitScope('user', portrait.user || {}) +
-      renderPortraitScope('persona', portrait.persona || {}) +
       renderPortraitScope('relationship', portrait.relationship || {}) +
     '</div>' +
     '<details class="portrait-maintenance">' +
@@ -4892,16 +4912,33 @@ function bucketTimeValue(bucket) {
   return Number.isFinite(time) ? time : 0;
 }
 
-function renderPortraitSelfAnchor(entry) {
-  var rows = entry && entry.bucket_id ? [{
-    text: entry.text || entry.name || entry.bucket_id || '',
-    scope: entry.configured ? '自我总入口' : '自我总入口 fallback',
-    updated_at: entry.updated_at || '',
-    evidence: [{ bucket_id: entry.bucket_id }]
-  }] : [];
-  return '<section class="portrait-scope portrait-self-anchor">' +
-    '<div class="portrait-layer-title">自我总入口</div>' +
-    renderPortraitRows(rows, '还没有自我总入口。') +
+function renderPortraitSelfAnchor(entry, personaState) {
+  var core = entry && entry.bucket_id ? String(entry.text || entry.name || entry.bucket_id || '').trim() : '';
+  var growing = String(personaState && personaState.stable || '').trim();
+  var revision = Number(personaState && personaState.stable_revision || 0);
+  var locked = personaState && personaState.stable_locked === true;
+  var meta = [
+    entry && entry.configured ? '自我总入口' : '自我总入口 fallback',
+    'revision ' + revision,
+    locked ? 'locked' : 'auto update'
+  ];
+  if (personaState && personaState.stable_source) meta.push(personaState.stable_source);
+  return '<section class="portrait-scope portrait-self-anchor portrait-summary-card">' +
+    '<div class="portrait-summary-head">' +
+      '<h3>自我总入口</h3>' +
+      '<button type="button" class="portrait-edit-button" onclick="openPortraitEditor(\'persona\')">编辑</button>' +
+    '</div>' +
+    '<div class="portrait-self-core">' + esc(core || '还没有自我总入口。') + '</div>' +
+    (entry && entry.bucket_id ? renderPortraitEvidence([{ bucket_id: entry.bucket_id }]) : '') +
+    '<div class="portrait-self-growth">' +
+      '<div class="portrait-self-growth-label">现在的我 · 自动生长</div>' +
+      '<div class="portrait-stable-preview' + (growing ? '' : ' empty') + '">' +
+        esc(growing || '还没有长出新的自我理解。') +
+      '</div>' +
+    '</div>' +
+    '<div class="portrait-summary-meta">' + meta.map(function(part) {
+      return '<span class="profile-chip">' + esc(part) + '</span>';
+    }).join('') + '</div>' +
   '</section>';
 }
 
@@ -4957,7 +4994,7 @@ function renderPortraitScope(scope, scopeState) {
 function portraitScopeLabel(scope) {
   return {
     user: 'User Portrait',
-    persona: 'Self Portrait',
+    persona: '自我总入口 · 现在的我',
     relationship: 'Relationship Portrait'
   }[scope] || scope;
 }
@@ -4974,6 +5011,8 @@ function renderPortraitEditorPanel(scope) {
   var content = document.getElementById('detail-content');
   var revision = Number(scopeState.stable_revision || 0);
   var locked = scopeState.stable_locked === true;
+  var selfEntry = portraitState && portraitState.self_anchor_entry || {};
+  var isPersona = scope === 'persona';
   var meta = [
     'revision ' + revision,
     locked ? 'locked' : 'auto update',
@@ -4983,14 +5022,24 @@ function renderPortraitEditorPanel(scope) {
   content.innerHTML =
     '<div class="portrait-editor-header">' +
       '<h2>' + esc(portraitScopeLabel(scope)) + '</h2>' +
-      '<div class="portrait-editor-note">主页面只展示 stable。这里负责编辑、锁定和检查后台生成依据。</div>' +
+      '<div class="portrait-editor-note">' + esc(isPersona
+        ? '原始核心保持第一人称原文且不会被后台改写；这里只编辑它后来长出的“现在的我”。'
+        : '主页面只展示 stable。这里负责编辑、锁定和检查后台生成依据。') + '</div>' +
     '</div>' +
     '<div class="portrait-editor-meta">' + meta.map(function(part) {
       return '<span class="profile-chip">' + esc(part) + '</span>';
     }).join('') + '</div>' +
     '<div id="portrait-editor-message" class="profile-proposal-message"></div>' +
+    (isPersona ? '<div class="portrait-editor-section">' +
+      '<div class="portrait-layer-title">原始核心 · 只读</div>' +
+      renderPortraitRows(selfEntry && selfEntry.bucket_id ? [{
+        text: selfEntry.text || selfEntry.name || selfEntry.bucket_id || '',
+        updated_at: selfEntry.updated_at || '',
+        evidence: [{ bucket_id: selfEntry.bucket_id }]
+      }] : [], '还没有自我总入口。') +
+    '</div>' : '') +
     '<div class="portrait-editor-section">' +
-      '<div class="portrait-layer-title">Stable</div>' +
+      '<div class="portrait-layer-title">' + (isPersona ? '现在的我 · 自动生长' : 'Stable') + '</div>' +
       renderPortraitStableEditor(scope, scopeState) +
     '</div>' +
     renderPortraitGenerationEvidence(scope, scopeState);
@@ -5029,6 +5078,7 @@ function renderPortraitStableEditor(scope, scopeState) {
   var locked = scopeState.stable_locked === true;
   var history = portraitRows(scopeState.stable_history).slice().reverse().slice(0, 8);
   var id = 'portrait-stable-' + scope;
+  var placeholder = scope === 'persona' ? '还没有长出新的第一人称自我理解。' : '还没有 stable portrait。';
   var historyHtml = history.length
     ? '<details class="portrait-history"><summary>历史版本 ' + history.length + '</summary>' + history.map(function(row) {
         var targetRevision = Number(row.revision || 0);
@@ -5040,7 +5090,7 @@ function renderPortraitStableEditor(scope, scopeState) {
       }).join('') + '</details>'
     : '';
   return '<div class="portrait-stable-editor">' +
-    '<textarea id="' + escAttr(id) + '" placeholder="还没有 stable portrait。">' + esc(scopeState.stable || '') + '</textarea>' +
+    '<textarea id="' + escAttr(id) + '" placeholder="' + escAttr(placeholder) + '">' + esc(scopeState.stable || '') + '</textarea>' +
     '<div class="portrait-stable-actions">' +
       '<button type="button" onclick="savePortraitStable(\'' + jsString(scope) + '\')">保存</button>' +
       '<button type="button" onclick="togglePortraitStableLock(\'' + jsString(scope) + '\',' + (locked ? 'false' : 'true') + ')">' + (locked ? '解锁自动更新' : '锁定') + '</button>' +

@@ -1634,6 +1634,11 @@ def _format_budgeted_handoff_sections(
     return result
 
 
+def _handoff_portrait_stable_body(value: object) -> str:
+    text = str(value or "").strip()
+    return re.sub(r"^Stable:\s*", "", text, count=1, flags=re.IGNORECASE).strip()
+
+
 async def _build_handoff_breath(max_tokens: int = 1200, session_id: str = "", debug: bool = False) -> str:
     try:
         all_buckets = await bucket_mgr.list_all(include_archive=False)
@@ -1674,11 +1679,23 @@ async def _build_handoff_breath(max_tokens: int = 1200, session_id: str = "", de
     self_anchor = _format_handoff_self_anchor(all_buckets, limit=1)
     anchors = _format_handoff_anchors(all_buckets, limit=2)
     care_memos = _format_handoff_care_memos(session_id=session_id, limit=3)
+    self_core = _trim_handoff_text_to_token_budget(self_anchor, 110)
+    self_growth = _trim_handoff_text_to_token_budget(
+        _handoff_portrait_stable_body(persona_portrait),
+        70,
+    )
+    self_context = "\n\n".join(
+        part
+        for part in (
+            self_core,
+            f"现在的我：\n{self_growth}" if self_growth else "",
+        )
+        if part
+    )
 
     sections = [
-        (SELF_ANCHOR_TAG, self_anchor, 150, False),
+        (SELF_ANCHOR_TAG, self_context, 180, False),
         ("User Portrait", user_portrait, 140, False),
-        ("AI Self Portrait", persona_portrait, 90, False),
         ("Current Focus", current_focus, 120, True),
         ("Relationship Portrait", relationship_portrait, 160, False),
         ("Recent Continuity", recent_continuity, 650, True),
