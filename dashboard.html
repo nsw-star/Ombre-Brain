@@ -5007,8 +5007,8 @@ function renderPortraitScope(scope, scopeState, generationStatus) {
     '<div class="portrait-summary-head">' +
       '<h3>' + esc(portraitScopeLabel(scope)) + '</h3>' +
       '<div class="profile-actions">' +
-        (scope === 'user' ? '<button type="button" onclick="runPortraitMaintain(\'user\')">重新生成</button>' : '') +
-        '<button type="button" class="portrait-edit-button" onclick="openPortraitEditor(\'' + jsString(scope) + '\')">编辑 / 版本</button>' +
+        '<button type="button" onclick="runPortraitMaintain(\'' + jsString(scope) + '\')">重新生成</button>' +
+        '<button type="button" class="portrait-edit-button" onclick="openPortraitEditor(\'' + jsString(scope) + '\')">编辑</button>' +
       '</div>' +
     '</div>' +
     '<div class="portrait-stable-preview' + (stable ? '' : ' empty') + '">' +
