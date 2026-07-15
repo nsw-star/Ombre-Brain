@@ -9278,13 +9278,15 @@ async def reflect(period: str = "daily", force: bool = False) -> dict:
     )
 
 
-async def portrait_maintain(force: bool = False) -> dict:
+async def portrait_maintain(force: bool = False, scope: str = "") -> dict:
     """维护每日 portrait state。只写 state/portrait_state.json，不写 profile_fact、anchor、pinned、protected 或 Core Memory。"""
     await decay_engine.ensure_started()
+    force_scopes = [str(scope or "").strip()] if str(scope or "").strip() else []
     return await portrait_engine.maintain_daily(
         bucket_mgr,
         persona_engine,
         force=force,
+        force_scopes=force_scopes,
     )
 
 
@@ -9309,6 +9311,9 @@ async def _self_anchor_entry_payload() -> dict:
 
 
 async def _portrait_state_payload() -> dict:
+    evidence_health = {}
+    if hasattr(portrait_engine, "reconcile_evidence"):
+        evidence_health = await portrait_engine.reconcile_evidence(bucket_mgr)
     state = portrait_engine.load_state()
     handoff_sections = {}
     if hasattr(portrait_engine, "build_handoff_sections"):
@@ -9322,14 +9327,31 @@ async def _portrait_state_payload() -> dict:
         "auto_enabled": bool(getattr(portrait_engine, "auto_enabled", True)),
         "auto_initial_enabled": bool(getattr(portrait_engine, "auto_initial_enabled", False)),
         "daily_enabled": bool(getattr(portrait_engine, "daily_enabled", True)),
+        "generator_ready": bool(getattr(portrait_engine, "client", None)),
+        "generator_model": str(getattr(portrait_engine, "model", "") or ""),
+        "generator_source": str(getattr(portrait_engine, "model_source", "dehydration") or "dehydration"),
         "updated_at": state.get("updated_at", ""),
         "last_run_date": state.get("last_run_date", ""),
         "portrait": state.get("portrait", {}),
         "recent_activities": state.get("recent_activities", []),
         "recent_timeline": state.get("recent_timeline", []),
+        "current_focus_items": (
+            portrait_engine.current_focus_items(max_items=8)
+            if hasattr(portrait_engine, "current_focus_items")
+            else state.get("recent_activities", [])
+        ),
         "current_focus": str(handoff_sections.get("current_focus") or ""),
         "stable_candidates": state.get("stable_candidates", []),
         "profile_fact_candidates": state.get("profile_fact_candidates", []),
+        "generation_status": (
+            {
+                scope: portrait_engine.scope_generation_status(scope)
+                for scope in ("user", "persona", "relationship")
+            }
+            if hasattr(portrait_engine, "scope_generation_status")
+            else {}
+        ),
+        "evidence_health": evidence_health,
         "self_anchor_entry": await _self_anchor_entry_payload(),
     }
 
@@ -9590,12 +9612,19 @@ async def api_portrait_maintain(request):
         body = {}
     try:
         await decay_engine.ensure_started()
+        scope = str(body.get("scope") or "").strip()
+        if scope and scope not in {"user", "persona", "relationship"}:
+            return JSONResponse({"error": "invalid scope"}, status_code=400)
+        maintain_kwargs = {"force": _bool_value(body.get("force"), False)}
+        if scope:
+            maintain_kwargs["force_scopes"] = [scope]
         result = await portrait_engine.maintain_daily(
             bucket_mgr,
             persona_engine,
-            force=_bool_value(body.get("force"), False),
+            **maintain_kwargs,
         )
-        return JSONResponse(result)
+        status_code = 409 if result.get("status") == "blocked" else 200
+        return JSONResponse(result, status_code=status_code)
     except Exception as e:
         logger.warning("Portrait maintain API failed: %s", e)
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -9637,6 +9666,59 @@ async def api_portrait_state_item_delete(request):
     if status == "conflict":
         return JSONResponse(result, status_code=409)
     return JSONResponse(result, status_code=400)
+
+
+@mcp.custom_route("/api/portrait-state/items", methods=["POST"])
+async def api_portrait_state_item_add(request):
+    """Add one manual Current Focus item."""
+    from starlette.responses import JSONResponse
+
+    err = _require_dashboard_auth(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "json body must be an object"}, status_code=400)
+    if str(body.get("area") or "") != "recent_activities":
+        return JSONResponse({"error": "only recent_activities can be added manually"}, status_code=400)
+    result = portrait_engine.add_recent_activity(
+        str(body.get("text") or ""),
+        source_date=str(body.get("source_date") or ""),
+    )
+    return _portrait_mutation_response(result)
+
+
+@mcp.custom_route("/api/portrait-state/items", methods=["PUT"])
+async def api_portrait_state_item_edit(request):
+    """Edit one Current Focus or portrait generation-evidence row."""
+    from starlette.responses import JSONResponse
+
+    err = _require_dashboard_auth(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "json body must be an object"}, status_code=400)
+    raw_index = body.get("index")
+    try:
+        index = int(raw_index) if raw_index is not None and str(raw_index) != "" else None
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "index must be an integer"}, status_code=400)
+    result = portrait_engine.edit_state_item(
+        area=str(body.get("area") or ""),
+        scope=str(body.get("scope") or ""),
+        layer=str(body.get("layer") or ""),
+        index=index,
+        text=str(body.get("text") or ""),
+        expected_text=str(body.get("expected_text") or ""),
+    )
+    return _portrait_mutation_response(result)
 
 
 def _portrait_mutation_response(result: dict):
@@ -11821,6 +11903,14 @@ async def api_config_get(request):
                 "persona_events_limit",
                 getattr(portrait_engine, "persona_events_limit", 24),
             ),
+            "user_rewrite_evidence_delta": portrait_cfg.get(
+                "user_rewrite_evidence_delta",
+                getattr(portrait_engine, "user_rewrite_evidence_delta", 10),
+            ),
+            "manual_suppress_days": portrait_cfg.get(
+                "manual_suppress_days",
+                getattr(portrait_engine, "manual_suppress_days", 14),
+            ),
         },
         "merge_threshold": config.get("merge_threshold", 90),
         "transport": config.get("transport", "stdio"),
@@ -11918,6 +12008,8 @@ async def api_config_update(request):
             "max_tokens": dehy.get("max_tokens", 1024),
             "temperature": dehy.get("temperature", 0.1),
         }
+        if getattr(portrait_engine, "model_source", "dehydration") == "dehydration":
+            portrait_engine = DailyPortraitMaintainer(config)
 
     # --- Embedding config ---
     if "embedding" in body:
@@ -12409,6 +12501,8 @@ async def api_config_update(request):
             "recent_buffer_max",
             "staging_pool_max",
             "candidate_max",
+            "user_rewrite_evidence_delta",
+            "manual_suppress_days",
         ):
             if key in p:
                 portrait_cfg[key] = p[key]
@@ -12846,6 +12940,8 @@ async def api_config_update(request):
                     "recent_buffer_max",
                     "staging_pool_max",
                     "candidate_max",
+                    "user_rewrite_evidence_delta",
+                    "manual_suppress_days",
                 ):
                     if key in body["portrait"]:
                         sc_portrait[key] = body["portrait"][key]

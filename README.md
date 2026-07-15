@@ -174,7 +174,7 @@ handoff 是一次性的紧凑恢复，不是每轮注入。当前内容按预算
 6. **照顾备忘**：已经到期、仍有效的照顾事项或上个窗口留给下个自己的行动话语。
 7. **Optional Anchors**：极少量长期锚点。
 
-画像由后台模型维护在 `state/portrait_state.json`，不会把高分 `profile_fact` 原文直接拼成画像。Stable 可在 Dashboard 手动编辑、锁定和回滚；首次画像默认需要手动生成，之后才按配置自动生长。
+画像由后台模型维护在 `state/portrait_state.json`，默认直接复用脱水模型，不会把高分 `profile_fact` 原文直接拼成画像。Stable 可在 Dashboard 手动编辑、锁定和回滚；首次画像默认需要手动生成，之后才按配置自动生长。User Portrait 相对上一版本新增 10 条可见生成依据时会强制重生；删除桶产生的悬空依据会在读取或生成前清理。
 
 自我入口使用第一人称。“现在的我”可从选定 self anchor 与符合身份条件的 whisper 中更新；原始自我核心始终保持只读。旧的独立 `AI Self Portrait` 和 Gateway 每轮 `Portrait Memory` 已退休，兼容配置名可能仍存在，但运行时不会重新开启该旧注入。
 

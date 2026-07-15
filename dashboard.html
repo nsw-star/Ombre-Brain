@@ -3732,6 +3732,15 @@
         <input type="number" id="cfg-portrait-first-limit" min="1" max="500" />
       </div>
       <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">第一次画像初始化可适当调大；之后每天只看当天新增/更新的记忆材料</div>
+      <div class="config-row">
+        <label>User 重生阈值</label>
+        <input type="number" id="cfg-portrait-user-delta" min="1" max="100" />
+      </div>
+      <div style="margin-top:-4px;margin-bottom:12px;padding-left:122px;font-size:11px;color:var(--text-light);">默认 10；生成依据相对上个 User Portrait 新增到该数量时完整重生</div>
+      <div class="config-row">
+        <label>删除抑制天数</label>
+        <input type="number" id="cfg-portrait-suppress-days" min="1" max="90" />
+      </div>
     </div>
 
     <div class="config-section">
@@ -4818,13 +4827,13 @@ async function loadPortraitState() {
   }
 }
 
-async function runPortraitMaintain() {
+async function runPortraitMaintain(scope) {
   setPortraitMaintainMessage('生成中…', '');
   try {
     var res = await authFetch(BASE + '/api/portrait-maintain', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ force: true })
+      body: JSON.stringify({ force: true, scope: scope || '' })
     });
     if (!res) return;
     var data = await res.json().catch(function() { return {}; });
@@ -4838,7 +4847,7 @@ async function runPortraitMaintain() {
       'persona events ' + (materials.persona_events == null ? '—' : materials.persona_events),
       'rejected ' + (Number.isFinite(rejected) ? rejected : 0)
     ].filter(Boolean);
-    setPortraitMaintainMessage('已生成：' + parts.join(' · '), 'ok');
+    setPortraitMaintainMessage((scope ? portraitScopeLabel(scope) + ' ' : '') + '已生成：' + parts.join(' · '), 'ok');
     await loadPortraitState();
   } catch (e) {
     setPortraitMaintainMessage('生成失败: ' + e.message, 'error');
@@ -4877,22 +4886,26 @@ function renderPortraitState(data) {
   if (!content || !summary) return;
   var state = data || {};
   var portrait = state.portrait || {};
+  var evidenceHealth = state.evidence_health || {};
   summary.innerHTML = '<div class="portrait-state-meta">' +
     '<span class="profile-chip">auto maintained</span>' +
     portraitStatusChip('engine', state.enabled !== false) +
     portraitStatusChip('auto', state.auto_enabled !== false) +
     portraitStatusChip('auto initial', state.auto_initial_enabled === true) +
     portraitStatusChip('daily', state.daily_enabled !== false) +
+    portraitStatusChip('generator', state.generator_ready === true) +
+    '<span class="profile-chip">model ' + esc(state.generator_model || '—') + ' · ' + esc(state.generator_source || 'dehydration') + '</span>' +
+    (Number(evidenceHealth.removed_evidence || 0) ? '<span class="profile-chip">已清理悬空依据 ' + Number(evidenceHealth.removed_evidence || 0) + '</span>' : '') +
     '<span class="profile-chip">last run ' + esc(state.last_run_date || '—') + '</span>' +
     '<span class="profile-chip">updated ' + esc(state.updated_at || '—') + '</span>' +
     '<span class="profile-chip">state ' + esc(state.state_path || '—') + '</span>' +
   '</div>';
   content.innerHTML =
     renderPortraitSelfAnchor(state.self_anchor_entry, portrait.persona || {}) +
-    renderPortraitCurrentFocus(state.current_focus) +
+    renderPortraitCurrentFocus(state.current_focus_items) +
     '<div class="portrait-state-grid">' +
-      renderPortraitScope('user', portrait.user || {}) +
-      renderPortraitScope('relationship', portrait.relationship || {}) +
+      renderPortraitScope('user', portrait.user || {}, state.generation_status && state.generation_status.user) +
+      renderPortraitScope('relationship', portrait.relationship || {}, state.generation_status && state.generation_status.relationship) +
     '</div>' +
     '<details class="portrait-maintenance">' +
       '<summary>生成记录与候选</summary>' +
@@ -4943,11 +4956,19 @@ function renderPortraitSelfAnchor(entry, personaState) {
 }
 
 function renderPortraitCurrentFocus(value) {
-  var rows = String(value || '').split(/\r?\n/).filter(Boolean).map(function(line) {
-    return { text: line };
+  var rows = portraitRows(value).map(function(row, index) {
+    return withPortraitActions(row, {
+      area: 'recent_activities',
+      layer: 'recent_activities',
+      index: index,
+      text: row && row.text || ''
+    });
   });
   return '<section class="portrait-scope portrait-current-focus">' +
-    '<div class="portrait-layer-title">Current Focus · handoff 实际注入</div>' +
+    '<div class="portrait-summary-head">' +
+      '<div class="portrait-layer-title">Current Focus · handoff 实际注入</div>' +
+      '<button type="button" class="portrait-edit-button" onclick="addPortraitRecentActivity()">添加</button>' +
+    '</div>' +
     renderPortraitRows(rows, '最近 7 天没有 current focus。') +
   '</section>';
 }
@@ -4968,7 +4989,7 @@ function renderPortraitTimeline(timeline, recentActivities) {
   '</section>';
 }
 
-function renderPortraitScope(scope, scopeState) {
+function renderPortraitScope(scope, scopeState, generationStatus) {
   var revision = Number(scopeState.stable_revision || 0);
   var locked = scopeState.stable_locked === true;
   var stable = String(scopeState.stable || '').trim();
@@ -4977,10 +4998,18 @@ function renderPortraitScope(scope, scopeState) {
     locked ? 'locked' : 'auto update'
   ];
   if (scopeState.stable_source) meta.push(scopeState.stable_source);
+  if (generationStatus && scope === 'user') {
+    meta.push('新增依据 ' + Number(generationStatus.added_since_stable || 0) + '/' + Number(generationStatus.rewrite_threshold || 10));
+  }
+  var blockers = generationStatus && Array.isArray(generationStatus.blockers) ? generationStatus.blockers : [];
+  blockers.forEach(function(blocker) { meta.push(blocker); });
   return '<section class="portrait-scope portrait-summary-card">' +
     '<div class="portrait-summary-head">' +
       '<h3>' + esc(portraitScopeLabel(scope)) + '</h3>' +
-      '<button type="button" class="portrait-edit-button" onclick="openPortraitEditor(\'' + jsString(scope) + '\')">编辑</button>' +
+      '<div class="profile-actions">' +
+        (scope === 'user' ? '<button type="button" onclick="runPortraitMaintain(\'user\')">重新生成</button>' : '') +
+        '<button type="button" class="portrait-edit-button" onclick="openPortraitEditor(\'' + jsString(scope) + '\')">编辑 / 版本</button>' +
+      '</div>' +
     '</div>' +
     '<div class="portrait-stable-preview' + (stable ? '' : ' empty') + '">' +
       esc(stable || 'Stable 尚未生成。') +
@@ -5055,13 +5084,13 @@ function renderPortraitGenerationEvidence(scope, scopeState) {
     updated_at: scopeState.mid_term_updated_at || ''
   }] : [];
   midRows = midRows.map(function(row) {
-    return withPortraitDelete(row, { area: 'portrait', scope: scope, layer: 'mid_term', text: row.text || '' });
+    return withPortraitActions(row, { area: 'portrait', scope: scope, layer: 'mid_term', text: row.text || '' });
   });
   var stagingRows = portraitRows(scopeState.staging_pool).slice(0, 12).map(function(row, index) {
-    return withPortraitDelete(row, { area: 'portrait', scope: scope, layer: 'staging_pool', index: index, text: row && row.text || '' });
+    return withPortraitActions(row, { area: 'portrait', scope: scope, layer: 'staging_pool', index: index, text: row && row.text || '' });
   });
   var recentRows = portraitRows(scopeState.recent_buffer).slice(0, 12).map(function(row, index) {
-    return withPortraitDelete(row, { area: 'portrait', scope: scope, layer: 'recent_buffer', index: index, text: row && row.text || '' });
+    return withPortraitActions(row, { area: 'portrait', scope: scope, layer: 'recent_buffer', index: index, text: row && row.text || '' });
   });
   var count = midRows.length + stagingRows.length + recentRows.length;
   return '<details class="portrait-editor-section">' +
@@ -5219,7 +5248,7 @@ function renderPortraitRows(rows, emptyText) {
 function renderPortraitCandidates(title, candidates) {
   var area = title.indexOf('Stable') === 0 ? 'stable_candidates' : 'profile_fact_candidates';
   var rows = portraitRows(candidates).map(function(row, index) {
-    return withPortraitDelete(row, { area: area, index: index, text: row && row.text || '' });
+    return withPortraitActions(row, { area: area, layer: area, index: index, text: row && row.text || '' });
   }).slice(-8).reverse();
   return '<section class="portrait-candidates">' +
     '<h3>' + esc(title) + '</h3>' +
@@ -5230,6 +5259,13 @@ function renderPortraitCandidates(title, candidates) {
 function withPortraitDelete(row, spec) {
   row = Object.assign({}, row || {});
   row._delete = spec;
+  return row;
+}
+
+function withPortraitActions(row, spec) {
+  row = Object.assign({}, row || {});
+  row._delete = spec;
+  row._edit = spec;
   return row;
 }
 
@@ -5264,11 +5300,15 @@ function renderPortraitRow(item) {
   var deleteButton = deleteSpec
     ? '<button type="button" class="danger" onclick="deletePortraitStateItem(\'' + deleteSpec + '\')">删除</button>'
     : '';
+  var editSpec = item._edit ? escAttr(jsString(JSON.stringify(item._edit))) : '';
+  var editButton = editSpec
+    ? '<button type="button" onclick="editPortraitStateItem(\'' + editSpec + '\')">编辑</button>'
+    : '';
   return '<div class="portrait-row">' +
     '<div class="portrait-row-text">' + esc(text) + '</div>' +
     (meta.length ? '<div class="portrait-row-meta">' + meta.map(function(part) {
       return '<span class="profile-chip">' + esc(part) + '</span>';
-    }).join('') + deleteButton + '</div>' : (deleteButton ? '<div class="portrait-row-meta">' + deleteButton + '</div>' : '')) +
+    }).join('') + editButton + deleteButton + '</div>' : ((editButton || deleteButton) ? '<div class="portrait-row-meta">' + editButton + deleteButton + '</div>' : '')) +
     renderPortraitEvidence(item.evidence) +
   '</div>';
 }
@@ -5296,6 +5336,54 @@ async function deletePortraitStateItem(specJson) {
     setPortraitMaintainMessage('已删除画像记录。', 'ok');
   } catch (e) {
     setPortraitMaintainMessage('删除失败: ' + e.message, 'error');
+  }
+}
+
+async function editPortraitStateItem(specJson) {
+  var spec;
+  try {
+    spec = JSON.parse(specJson || '{}');
+  } catch (e) {
+    alert('编辑参数错误。');
+    return;
+  }
+  var currentText = String(spec.text || '');
+  var nextText = prompt('编辑这条生成依据：', currentText);
+  if (nextText == null || !nextText.trim() || nextText.trim() === currentText.trim()) return;
+  spec.expected_text = currentText;
+  spec.text = nextText.trim();
+  try {
+    var res = await authFetch(BASE + '/api/portrait-state/items', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(spec)
+    });
+    if (!res) return;
+    var data = await res.json().catch(function() { return {}; });
+    if (!res.ok) throw new Error(data.error || data.reason || '编辑失败');
+    await loadPortraitState();
+    setPortraitMaintainMessage('生成依据已更新。', 'ok');
+  } catch (e) {
+    setPortraitMaintainMessage('编辑失败: ' + e.message, 'error');
+  }
+}
+
+async function addPortraitRecentActivity() {
+  var text = prompt('添加一条最近事项：');
+  if (text == null || !text.trim()) return;
+  try {
+    var res = await authFetch(BASE + '/api/portrait-state/items', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ area: 'recent_activities', text: text.trim() })
+    });
+    if (!res) return;
+    var data = await res.json().catch(function() { return {}; });
+    if (!res.ok) throw new Error(data.error || data.reason || '添加失败');
+    await loadPortraitState();
+    setPortraitMaintainMessage('最近事项已添加。', 'ok');
+  } catch (e) {
+    setPortraitMaintainMessage('添加失败: ' + e.message, 'error');
   }
 }
 
@@ -8304,6 +8392,10 @@ async function loadConfig() {
       (cfg.portrait && cfg.portrait.material_limit) ?? 18;
     document.getElementById('cfg-portrait-first-limit').value =
       (cfg.portrait && cfg.portrait.first_run_material_limit) ?? 160;
+    document.getElementById('cfg-portrait-user-delta').value =
+      (cfg.portrait && cfg.portrait.user_rewrite_evidence_delta) ?? 10;
+    document.getElementById('cfg-portrait-suppress-days').value =
+      (cfg.portrait && cfg.portrait.manual_suppress_days) ?? 14;
     document.getElementById('cfg-self-anchor-entry').value =
       (cfg.self_anchor && cfg.self_anchor.entry_bucket_id) || '';
     document.getElementById('cfg-merge').value = cfg.merge_threshold ?? 90;
@@ -8437,6 +8529,8 @@ async function saveConfig(persist, persistEnv) {
       daily_enabled: document.getElementById('cfg-portrait-daily').value === 'true',
       material_limit: numberValue('cfg-portrait-material-limit', 18),
       first_run_material_limit: numberValue('cfg-portrait-first-limit', 160),
+      user_rewrite_evidence_delta: numberValue('cfg-portrait-user-delta', 10),
+      manual_suppress_days: numberValue('cfg-portrait-suppress-days', 14),
     };
     candidate.self_anchor = {
       entry_bucket_id: document.getElementById('cfg-self-anchor-entry').value.trim(),

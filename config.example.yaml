@@ -723,6 +723,8 @@ portrait:
   json_response_format: true
   material_limit: 18
   first_run_material_limit: 160
+  user_rewrite_evidence_delta: 10 # regenerate User Portrait after 10 new visible evidence items
+  manual_suppress_days: 14        # keep manually deleted evidence/recent items from immediately returning
   source_excerpt_chars: 900
   recent_continuity_days: 3
   persona_events_limit: 24
