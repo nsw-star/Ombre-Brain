@@ -26,6 +26,7 @@
 | `reminder_create` / `reminder_list` / `reminder_update` | 创建、查看、完成或稍后提醒独立照顾备忘；备忘不写记忆桶、不触发 embedding，不要为了提醒而重复写 `hold` |
 | `darkroom_enter` | 写入未想透、不该给用户看、不该进普通记忆的内在反思；note 默认用第一人称。默认新开房间，只有明确续写或撤回当前 active 房间时才传 `new_room=false`；可带 `lock_for="6h"` / `"3d"`；只返回门口状态，不回显正文 |
 | `darkroom_rooms` | 只列暗房门牌和锁门状态，不返回正文；默认列 active，可传 `visibility="all"`，找到 room_id 后再决定续写或查看 |
+| `darkroom_delete` | 从暗房主存储删除一整间房及全部 revisions；先用 `darkroom_rooms(visibility="all")` 确认精确 room_id，再传 `confirm="DELETE"`；不接受 `latest`，并保留本地私密备份 |
 | `darkroom_view` | 给用户只读查看 active 且锁门时间已过的暗房内容；没解锁时不返回正文；按 room_id 可返回该房间全部 revisions |
 | `introspection` | 需要清醒自省时调用——读最近普通记忆。有沉淀就写年轮，能放下的就 resolve |
 | `entity_edge_backfill` | 维护型工具，只补 `entity_edges.jsonl`；普通聊天不要调用。用户明确要求修索引时先保持 `dry_run=true` 检查 |

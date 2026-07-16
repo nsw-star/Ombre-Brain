@@ -8372,6 +8372,17 @@ async def darkroom_rooms(limit: int = 20, visibility: str = "active") -> dict:
 
 
 @mcp.tool()
+async def darkroom_delete(room_id: str, confirm: str = "") -> dict:
+    """从暗房主存储删除一整间房及全部 revisions；必须传精确 room_id 和 confirm="DELETE"，并保留本地私密备份。"""
+    try:
+        return darkroom_store.delete_room(room_id, confirm=confirm)
+    except ValueError as exc:
+        return {"status": "error", "error": str(exc), "room_id": str(room_id or "")}
+    except KeyError:
+        return {"status": "not_found", "error": "room not found", "room_id": str(room_id or "")}
+
+
+@mcp.tool()
 async def darkroom_view(entry_id: str = "latest") -> dict:
     """只读查看一条已解锁的暗房内容；未到锁门时间不返回正文。"""
     try:

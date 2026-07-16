@@ -2,12 +2,12 @@
 
 这份文档用于把 Ombre-Brain 接给 Operit、RikkaHub、ChatGPT MCP、Claude Connector 或其它聊天平台时，直接粘贴到平台指令里。
 
-## 当前 MCP 工具（18 个）
+## 当前 MCP 工具（19 个）
 
 - 读取与盘点：`breath`、`read_bucket`、`list_buckets_light`、`pulse`、`introspection`
 - 写入与维护记忆：`hold`、`grow`、`comment_bucket`、`delete_bucket_comment`、`trace`、`profile_fact`
 - 照顾备忘：`reminder_create`、`reminder_list`、`reminder_update`
-- 暗房：`darkroom_enter`、`darkroom_rooms`、`darkroom_view`
+- 暗房：`darkroom_enter`、`darkroom_rooms`、`darkroom_delete`、`darkroom_view`
 - 索引维护：`entity_edge_backfill`（维护工具，默认 `dry_run=true`；普通聊天不要调用）
 
 ## Copy Block
@@ -55,6 +55,7 @@
 - darkroom_enter 的 note 默认用第一人称写，不用第三人称称呼自己；只有引用外部事实或小雨原话时才保留第三人称。
 - 写错要撤回已有 active 房间：再次调用 darkroom_enter(note="撤回：上一条写错了。", new_room=false, visibility="retracted")。必须带 new_room=false，否则会新开一间 retracted 房，不会撤回原房间。
 - 找之前房间的 room_id：darkroom_rooms(limit=20) 只返回门牌和锁门状态，不返回正文；默认只列 active 房间，可传 visibility="all" 看全部门牌。
+- 删除整间暗房：先用 darkroom_rooms(visibility="all") 确认精确 room_id，再调用 darkroom_delete(room_id="...", confirm="DELETE")。它会从主存储删除该房间全部 revisions 和相关 release 记录；不接受 latest，并在本地私密目录保留删除前备份。
 - 给用户查看只用 darkroom_view。它只读取 active 且锁门时间已过的房间；没解锁返回 unlock_at；可按 room_id 读取该房间全部 revisions 正文和每次写入时间。
 - darkroom_enter 只返回门口事件和状态，不回显 note 正文。
 
