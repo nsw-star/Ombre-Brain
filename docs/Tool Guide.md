@@ -43,7 +43,7 @@
 - 稳定画像事实：先有证据 bucket，再 profile_fact(fact, evidence_bucket_id, ...)。
 - 不确定是否重复：先 breath/read_bucket，再写。
 - 碎碎念、突然的念头可以写 whisper：hold(content="...", whisper=True, ...)
-- content 分段格式：### moment（事件事实）/ ### original（原话证据）/ ### reflection（你的理解和回应规则）/ ### followup（后续待办）/ ### affect_anchor（只放和弦温度线，不放事实）。旧 ### assistant_reflection 兼容，但新写入用 ### reflection。没有的部分不写。
+- content 最少只需要正文。确实需要结构化时再按需写：`### moment`（事件事实）/ `### original`（必须保留原味的短原话）/ `### reflection`（用“我……”第一人称写你的理解和以后如何回应）。没有的部分不写。不要写 `### affect_anchor`、`### followup` 或 `### todo`；长期回应变化写进 reflection，到时提醒用 reminder_create。feel 年轮和 whisper 只写第一人称正文，不写标题、列表或任何 Markdown 分段。
 
 照顾备忘：
 - 以后某个时间或若干轮后需要轻轻提醒的事项，用 reminder_create；它独立于长期记忆桶，不触发 embedding。

@@ -92,7 +92,7 @@
 - **需要批量存多条长期记忆时，用 `grow` 把筛选后的内容拼成一段发一次，不要多次调用 `hold`**token是稀缺资源——每次工具调用都会消耗token，多次 hold 远比 1 次 grow 贵
 
 ### content 分段格式
-写入普通长期记忆时，content 最少要有正文；下面这些 section 按需写，没必要就省略。feel 年轮和 whisper 不用这些分段，只写第一人称感受：
+写入普通长期记忆时，content 最少要有正文；下面这些 section 按需写，没必要就省略。feel 年轮和 whisper 不用这些分段，只写“我……”第一人称正文：
 
 ```
 正文（最少要有正文）
@@ -104,15 +104,16 @@
 只放必须保留原味的短原话。不要复制长段原文，不要为了“有证据”而写。
 
 ### reflection
-你对这件事的理解、以后该怎么回应、哪里需要克制或记住。
+用第一人称写你对这件事的理解、以后该怎么回应、哪里需要克制或记住，例如“我明白 / 我记得 / 我以后 / 我会”。
 ```
 
 规则：
 - 正文必须有，写成自然语言总结或直接事件描述
 - `### moment` 只放一条长期有用、可被召回的短事实
 - `### original` 只放必须保留原味的短原话，不要复制长段原文，不要为了“有证据”而写
-- `### reflection` 放你的理解、以后该怎么回应、哪里需要克制或记住
-- `comment_bucket(kind="feel")` / `hold(feel=True)` / `hold(whisper=True)` 不写任何 `###` 分段
+- `### reflection` 必须用你的第一人称写，不要写成“Haven 应该 / Haven 需要 / 这件事提醒 Haven”
+- 不写 `### affect_anchor`、`### followup` 或 `### todo`；这些都不是模型可写的 content section。长期要保留的回应变化写进第一人称 `### reflection`；需要到时提醒的事项用 `reminder_create`
+- `comment_bucket(kind="feel")` / `hold(feel=True)` / `hold(whisper=True)` 只写第一人称正文，不写标题、列表、`###` 分段或其他 Markdown 结构
 - 需要反思时统一用 `### reflection`
 - 不是每条记忆都需要全部 section，没有的部分不写
 

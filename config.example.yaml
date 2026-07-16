@@ -637,8 +637,8 @@ reflection:
   auto_enabled: true
   daily_enabled: true              # daily relationship-weather impressions; persona_events only supplement
   enrich_on_write: true
-  memory_affect_anchor_enabled: true      # ordinary memory enrich may append affect_anchor; turn off for quieter buckets
-  relationship_weather_affect_anchor_enabled: true  # daily/weekly relationship weather keeps affect_anchor by default
+  memory_affect_anchor_enabled: false     # legacy compatibility only; new writes do not append affect_anchor sections
+  relationship_weather_affect_anchor_enabled: false  # legacy compatibility only; feel content stays body-only
   enrich_backfill_enabled: true      # hourly scheduler backfills missing tags/confidence/edges
   enrich_backfill_limit: 5           # max buckets to backfill per scheduler tick
   edge_backfill_limit: 5             # default limit for manual edge_backfill; only writes memory_edges

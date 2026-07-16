@@ -2135,6 +2135,63 @@ def _favorite_reason_error() -> str:
     return "标记 favorite memory 需要在正文写明「### reflection」。旧的「喜欢它的原因」仍兼容。"
 
 
+_NEW_WRITE_FORBIDDEN_HEADINGS = {
+    "followup",
+    "followups",
+    "followuplog",
+    "followupslog",
+    "todo",
+    "todolog",
+    "next",
+    "后续",
+    "后续待办",
+    "后续记录",
+    "待办",
+    "待办事项",
+    "待办记录",
+    "affectanchor",
+}
+_NEW_WRITE_REFLECTION_HEADINGS = {
+    "reflection",
+    "assistantreflection",
+    "havenreflection",
+}
+
+
+def _uses_first_person_voice(text: str) -> bool:
+    value = str(text or "").strip()
+    return bool("我" in value or re.search(r"(?i)\b(?:i|me|my|mine|myself)\b", value))
+
+
+def _memory_write_contract_error(content: str, *, feel_only: bool = False) -> str:
+    """Reject new memory shapes that the model should rewrite instead of persisting."""
+    text = strip_wikilinks(str(content or "")).strip()
+    matches = list(re.finditer(r"(?m)^\s{0,3}#{1,6}\s+(.+?)\s*$", text))
+    if feel_only:
+        if matches:
+            return "feel 只写第一人称正文，不写标题、Markdown 分段或 ### section。"
+        if not _uses_first_person_voice(text):
+            return "feel 必须改成第一人称正文，用“我……”表达模型自己的感受。"
+        return ""
+
+    for index, match in enumerate(matches):
+        heading = _normalize_section_heading(match.group(1))
+        if heading in _NEW_WRITE_FORBIDDEN_HEADINGS:
+            if heading == "affectanchor":
+                return "新记忆不接受 ### affect_anchor；它不是模型可写的 content section。"
+            return (
+                "新记忆不接受 ### followup / todo。需要长期保留的回应变化请改写进第一人称 "
+                "### reflection；需要到时提醒的事项请用 reminder_create。"
+            )
+        if heading not in _NEW_WRITE_REFLECTION_HEADINGS:
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        reflection = text[match.end():end].strip()
+        if not _uses_first_person_voice(reflection):
+            return "### reflection 必须用模型第一人称写，用“我记得 / 我明白 / 我以后 / 我会”等表达。"
+    return ""
+
+
 def _normalize_memory_sections_for_write(content: str) -> str:
     """Keep new tool-written buckets in the current moment/reflection/anchor shape."""
     raw = str(content or "").strip()
@@ -7989,12 +8046,16 @@ async def comment_bucket(
     valence: float = -1,
     arousal: float = -1,
 ) -> dict:
-    """给已有 bucket 追加年轮/补充感受；会 touch，不改正文。kind=feel 时 content 只写第一人称感受，不写分段标题。"""
+    """给已有 bucket 追加年轮/补充感受；会 touch，不改正文。kind=feel 时 content 只能写“我……”第一人称正文，不写标题或任何 Markdown 分段。"""
     bucket_id = _coerce_memory_id(bucket_id)
     if not bucket_id or not MEMORY_ID_RE.fullmatch(bucket_id):
         return {"error": "invalid bucket_id"}
     if not content or not content.strip():
         return {"error": "empty content"}
+    if str(kind or "").strip().lower() == "feel":
+        contract_error = _memory_write_contract_error(content, feel_only=True)
+        if contract_error:
+            return {"error": "invalid feel content", "reason": contract_error}
     if not await bucket_mgr.get(bucket_id):
         return {"error": "not found", "id": bucket_id}
 
@@ -8185,12 +8246,16 @@ async def hold(
     date: str = "",
     domain: str = "",
 ) -> str:
-    """写一条长期记忆。单个事实/承诺/偏好用 hold；旧记忆的新感受用 comment_bucket；悄悄话用 whisper=True。date 可传事件日期；title 可选，传了就用给定标题，不传则自动生成。普通记忆不用填写 domain，系统会自动判断；维护自我锚点等特殊桶时可显式传 domain。显式 valence/arousal 会覆盖自动情绪。普通记忆 content 的最小写入就是正文；只有确实需要结构化时才按需使用 ### moment、### original、### reflection。需要之后轻轻提醒/照顾备忘的事项用 reminder_create，不写进长期记忆。feel=True/whisper=True 时 content 只写第一人称感受，不写分段标题。"""
+    """写一条长期记忆。单个事实/承诺/偏好用 hold；旧记忆的新感受用 comment_bucket；悄悄话用 whisper=True。date 可传事件日期；title 可选，传了就用给定标题，不传则自动生成。普通记忆不用填写 domain，系统会自动判断；维护自我锚点等特殊桶时可显式传 domain。显式 valence/arousal 会覆盖自动情绪。普通记忆 content 的最小写入就是正文；只有确实需要结构化时才按需使用 ### moment、### original、### reflection；reflection 必须写成“我……”第一人称。不要写 ### affect_anchor、### followup 或 ### todo：长期回应变化写进 reflection，到时提醒用 reminder_create。feel=True/whisper=True 时 content 只能写第一人称正文，不写标题或任何 Markdown 分段。"""
     await decay_engine.ensure_started()
 
     # --- Input validation / 输入校验 ---
     if not content or not content.strip():
         return "内容为空，无法存储。"
+
+    contract_error = _memory_write_contract_error(content, feel_only=bool(feel or whisper))
+    if contract_error:
+        return f"写入被拒绝：{contract_error}"
 
     importance = max(1, min(10, importance))
     extra_tags = [t.strip() for t in tags.split(",") if t.strip()]
@@ -8440,6 +8505,9 @@ def _looks_like_operit_auto_grow_content(content: str) -> bool:
 
 
 async def _grow_direct_structured_content(content: str, title: str = "", gate_prefix: str = "") -> str:
+    contract_error = _memory_write_contract_error(content)
+    if contract_error:
+        return f"{gate_prefix}写入被拒绝：{contract_error}"
     direct_content = str(content or "").strip()
     try:
         analysis = await dehydrator.analyze(direct_content)
@@ -8492,7 +8560,7 @@ async def _grow_direct_structured_content(content: str, title: str = "", gate_pr
 
 @mcp.tool()
 async def grow(content: str, auto: bool = False, source: str = "", title: str = "", context: Context | None = None) -> str:
-    """把筛过的长片段拆成少量长期记忆；单条事实/承诺/偏好优先 hold，旧记忆补感受优先 comment_bucket。只有多个已筛选长期记忆点才用 grow，别塞整段流水账。保留原文称呼、昵称、互称、自称和原话，不要把临时称呼推成稳定画像事实。title 可选，短内容时传了就用你给的标题。普通记忆 content 的最小写入就是正文；只有确实需要结构化时才按需使用 ### moment、### original、### reflection。需要之后轻轻提醒/照顾备忘的事项用 reminder_create，不写进长期记忆。feel 年轮只写第一人称感受，不写分段标题。"""
+    """把筛过的长片段拆成少量长期记忆；单条事实/承诺/偏好优先 hold，旧记忆补感受优先 comment_bucket。只有多个已筛选长期记忆点才用 grow，别塞整段流水账。保留原文称呼、昵称、互称、自称和原话，不要把临时称呼推成稳定画像事实。title 可选，短内容时传了就用你给的标题。普通记忆 content 的最小写入就是正文；只有确实需要结构化时才按需使用 ### moment、### original、### reflection；reflection 必须写成“我……”第一人称。不要写 ### affect_anchor、### followup 或 ### todo：长期回应变化写进 reflection，到时提醒用 reminder_create。feel 年轮只写第一人称正文，不写标题或任何 Markdown 分段。"""
     await decay_engine.ensure_started()
 
     if not content or not content.strip():
@@ -8586,6 +8654,10 @@ async def grow(content: str, auto: bool = False, source: str = "", title: str = 
         try:
             item_tags = item.get("tags", [])
             item_content = _normalize_memory_sections_for_write(item.get("content", ""))
+            contract_error = _memory_write_contract_error(item_content)
+            if contract_error:
+                results.append(f"⚠️{item.get('name', '未命名')}: {contract_error}")
+                continue
             item_content = await _auto_generate_write_moment_if_needed(
                 item_content,
                 item_tags,
@@ -8646,10 +8718,9 @@ async def profile_fact(
     evidence_moment_id: str = "",
     evidence_context: str = "",
     reflection: str = "",
-    followup: str = "",
     confidence: float = 0.9,
 ) -> str:
-    """手动写入一条画像事实，并强制关联证据桶。先有事件桶，再用这个工具固化稳定偏好/事实。"""
+    """手动写入一条画像事实，并强制关联证据桶。先有事件桶，再用这个工具固化稳定偏好/事实。reflection 可选，但必须写成“我……”第一人称；不要写 followup。"""
     fact = str(fact or "").strip()
     evidence_bucket_id = str(evidence_bucket_id or "").strip()
     if not fact:
@@ -8678,11 +8749,12 @@ async def profile_fact(
     predicate_key = _profile_key(predicate, "")
     object_text = str(object_value or "").strip()
     confidence = _float_between(confidence, 0.9, 0.0, 1.0)
+    if str(reflection or "").strip() and not _uses_first_person_voice(reflection):
+        return "写入被拒绝：reflection 必须用模型第一人称写，用“我记得 / 我明白 / 我以后 / 我会”等表达。"
     body = _profile_fact_body(
         fact=fact,
         evidence_context=evidence_context,
         reflection=reflection,
-        followup=followup,
     )
     tags = ["profile_fact", f"profile_{kind}"]
     if predicate_key:
@@ -9283,7 +9355,7 @@ async def dream() -> str:
 # 工具 6：reflect — 生成日印象
 # =============================================================
 async def reflect(period: str = "daily", force: bool = False) -> dict:
-    """生成 daily relationship_weather 类型的 feel,记录当天关系天气,正文会带 affect_anchor 和弦。weekly 默认关闭,需 reflection.weekly_enabled=true 才会生成; force=True 会重写同周期结果。它不会替代 hold/grow 写具体 bucket。"""
+    """生成 daily relationship_weather 类型的 feel，content 只写“我……”第一人称正文，不带 Markdown section。weekly 默认关闭，需 reflection.weekly_enabled=true 才会生成；force=True 会重写同周期结果。它不会替代 hold/grow 写具体 bucket。"""
     await decay_engine.ensure_started()
     return await reflection_engine.reflect(
         period=period,
@@ -10136,7 +10208,6 @@ async def api_profile_fact_proposal_confirm(request):
         evidence_moment_id=proposal["evidence_moment_id"],
         evidence_context=proposal["reason"],
         reflection="",
-        followup="",
         confidence=proposal["confidence"],
     )
     if not result.startswith("profile_fact→"):
@@ -13317,10 +13388,10 @@ if __name__ == "__main__":
                         reflection_cfg.get("daily_enabled", True)
                     )
                     local_reflection_engine.memory_affect_anchor_enabled = bool(
-                        reflection_cfg.get("memory_affect_anchor_enabled", True)
+                        reflection_cfg.get("memory_affect_anchor_enabled", False)
                     )
                     local_reflection_engine.relationship_weather_affect_anchor_enabled = bool(
-                        reflection_cfg.get("relationship_weather_affect_anchor_enabled", True)
+                        reflection_cfg.get("relationship_weather_affect_anchor_enabled", False)
                     )
                     local_reflection_engine.daily_min_memory_items = _int_between(
                         reflection_cfg.get("daily_min_memory_items"),
