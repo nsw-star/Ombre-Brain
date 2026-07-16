@@ -240,18 +240,28 @@ class DailyPortraitMaintainer:
     ) -> dict:
         if not self.enabled:
             return {"status": "disabled", "reason": "portrait_disabled"}
-        if not self.daily_enabled:
-            return {"status": "skipped", "reason": "daily_disabled"}
 
         requested_scopes = [
             scope
             for scope in dict.fromkeys(str(scope or "").strip() for scope in (force_scopes or []))
             if scope in PORTRAIT_SCOPES
         ]
+        if not self.daily_enabled and not force:
+            return {"status": "skipped", "reason": "daily_disabled"}
         await self.reconcile_evidence(bucket_mgr)
         now_local = self._local_now(now)
         date_key = now_local.date().isoformat()
         state = self.load_state()
+        if requested_scopes and not self.client:
+            return {
+                "status": "blocked",
+                "reason": "generator_unavailable",
+                "scopes": requested_scopes or list(PORTRAIT_SCOPES),
+                "date": date_key,
+                "state_path": self.state_path,
+                "generator_model": self.model,
+                "generator_source": self.model_source,
+            }
         locked_scopes = [
             scope
             for scope in requested_scopes
@@ -265,6 +275,16 @@ class DailyPortraitMaintainer:
                 "date": date_key,
                 "state_path": self.state_path,
             }
+        before_revisions = {
+            scope: int(((state.get("portrait", {}) or {}).get(scope, {}) or {}).get("stable_revision") or 0)
+            for scope in PORTRAIT_SCOPES
+        }
+        before_stable_present = {
+            scope: bool(
+                str(((state.get("portrait", {}) or {}).get(scope, {}) or {}).get("stable") or "").strip()
+            )
+            for scope in PORTRAIT_SCOPES
+        }
         if self._has_run_for_date(state, date_key) and not force:
             return {
                 "status": "exists",
@@ -361,8 +381,41 @@ class DailyPortraitMaintainer:
         ]
         next_state["last_run_date"] = max(run_dates) if run_dates else date_key
         self.save_state(next_state)
+        generation = {}
+        for scope in PORTRAIT_SCOPES:
+            scope_state = ((next_state.get("portrait", {}) or {}).get(scope, {}) or {})
+            after_revision = int(scope_state.get("stable_revision") or 0)
+            generation[scope] = {
+                "before_revision": before_revisions[scope],
+                "after_revision": after_revision,
+                "changed": after_revision > before_revisions[scope],
+                "stable_present": bool(str(scope_state.get("stable") or "").strip()),
+            }
+        target_scopes = requested_scopes
+        unchanged_targets = [scope for scope in target_scopes if not generation[scope]["changed"]]
+        status = "updated" if state.get("runs") else "initialized"
+        reason = ""
+        if unchanged_targets:
+            status = "blocked"
+            rejected_reasons = {
+                str(row.get("reason") or "")
+                for row in rejected
+                if isinstance(row, dict) and str(row.get("reason") or "")
+            }
+            if "generator_error" in rejected_reasons:
+                reason = "generator_error"
+            elif "missing_scope_decisions" in rejected_reasons:
+                reason = "missing_scope_decisions"
+            else:
+                reason = (
+                    "stable_not_generated"
+                    if any(not generation[scope]["stable_present"] for scope in unchanged_targets)
+                    else "stable_not_changed"
+                )
         return {
-            "status": "updated" if state.get("runs") else "initialized",
+            "status": status,
+            "reason": reason,
+            "scopes": unchanged_targets,
             "date": date_key,
             "state_path": self.state_path,
             "initial": initial,
@@ -373,6 +426,8 @@ class DailyPortraitMaintainer:
             "patch_counts": {key: len(normalized_patch.get(key, [])) for key in PATCH_KEYS},
             "rejected": rejected[:8],
             "forced_scopes": requested_scopes,
+            "generation": generation,
+            "before_stable_present": before_stable_present,
         }
 
     async def run_due(self, bucket_mgr, persona_engine=None) -> list[dict]:
@@ -1358,9 +1413,15 @@ class DailyPortraitMaintainer:
         patch: dict,
         *,
         force_scopes: list[str] | None = None,
-    ) -> tuple[list[dict] | None, list[dict]]:
+    ) -> tuple[list[dict], list[dict]]:
         if not self.client:
-            return None, []
+            return [], [
+                {
+                    "key": "stable_maintenance",
+                    "reason": "generator_unavailable",
+                    "item": ",".join(force_scopes or PORTRAIT_SCOPES),
+                }
+            ]
         required_rewrite_scopes = self._required_stable_rewrite_scopes(
             state,
             patch,
@@ -1376,7 +1437,13 @@ class DailyPortraitMaintainer:
             )
         except Exception as exc:
             logger.warning("Portrait stable maintenance failed, keeping primary patch: %s", exc)
-            return None, []
+            return [], [
+                {
+                    "key": "stable_maintenance",
+                    "reason": "generator_error",
+                    "item": ",".join(force_scopes or PORTRAIT_SCOPES),
+                }
+            ]
         items, rejected, decided_scopes = self._normalize_stable_maintenance(
             raw,
             state,
@@ -1384,8 +1451,14 @@ class DailyPortraitMaintainer:
             patch,
             required_rewrite_scopes=required_rewrite_arg,
         )
+        items_by_scope = {
+            str(item.get("scope") or ""): item
+            for item in items
+            if isinstance(item, dict) and str(item.get("scope") or "") in PORTRAIT_SCOPES
+        }
         missing_scopes = [scope for scope in PORTRAIT_SCOPES if scope not in decided_scopes]
         if missing_scopes:
+            originally_missing = set(missing_scopes)
             try:
                 retry_raw = await self._api_stable_maintenance(
                     date_key,
@@ -1400,26 +1473,39 @@ class DailyPortraitMaintainer:
                     patch,
                     required_rewrite_scopes=missing_scopes,
                 )
-                retry_missing = [scope for scope in PORTRAIT_SCOPES if scope not in retry_decided]
-                if not retry_missing:
-                    return retry_items, retry_rejected
-                missing_scopes = retry_missing
-                rejected = retry_rejected
+                resolved_by_retry = originally_missing & retry_decided
+                for item in retry_items:
+                    scope = str(item.get("scope") or "") if isinstance(item, dict) else ""
+                    if scope in resolved_by_retry:
+                        items_by_scope[scope] = item
+                decided_scopes.update(resolved_by_retry)
+                rejected = [
+                    row
+                    for row in rejected
+                    if str(row.get("item") or "") not in resolved_by_retry
+                ]
+                missing_scopes = [scope for scope in PORTRAIT_SCOPES if scope not in decided_scopes]
+                rejected.extend(
+                    row
+                    for row in retry_rejected
+                    if str(row.get("item") or "") in set(missing_scopes)
+                )
             except Exception as exc:
                 logger.warning("Portrait stable maintenance retry failed: %s", exc)
-            logger.warning(
-                "Portrait stable maintenance incomplete, keeping primary patch | missing=%s",
-                ",".join(missing_scopes),
-            )
-            rejected.append(
-                {
-                    "key": "stable_maintenance",
-                    "reason": "missing_scope_decisions",
-                    "item": ",".join(missing_scopes),
-                }
-            )
-            return None, rejected
-        return items, rejected
+            if missing_scopes:
+                logger.warning(
+                    "Portrait stable maintenance incomplete, keeping valid scope rewrites | missing=%s",
+                    ",".join(missing_scopes),
+                )
+                rejected.append(
+                    {
+                        "key": "stable_maintenance",
+                        "reason": "missing_scope_decisions",
+                        "item": ",".join(missing_scopes),
+                    }
+                )
+        ordered_items = [items_by_scope[scope] for scope in PORTRAIT_SCOPES if scope in items_by_scope]
+        return ordered_items, rejected
 
     async def _api_stable_maintenance(
         self,

@@ -9621,9 +9621,12 @@ async def api_portrait_maintain(request):
         scope = str(body.get("scope") or "").strip()
         if scope and scope not in {"user", "persona", "relationship"}:
             return JSONResponse({"error": "invalid scope"}, status_code=400)
-        maintain_kwargs = {"force": _bool_value(body.get("force"), False)}
+        force = _bool_value(body.get("force"), False)
+        maintain_kwargs = {"force": force}
         if scope:
             maintain_kwargs["force_scopes"] = [scope]
+        elif force:
+            maintain_kwargs["force_scopes"] = ["user", "persona", "relationship"]
         result = await portrait_engine.maintain_daily(
             bucket_mgr,
             persona_engine,

@@ -4807,6 +4807,39 @@ function setPortraitMaintainMessage(message, tone) {
   });
 }
 
+function portraitMaintainError(data) {
+  data = data || {};
+  var reason = String(data.reason || '').trim();
+  var labels = {
+    generator_unavailable: '生成模型未就绪；画像会复用脱水模型，请先配置脱水模型的 API Key 和 Base URL。',
+    generator_error: '生成模型调用失败。',
+    stable_locked: 'Stable 已锁定，请先解锁后再重新生成。',
+    stable_not_generated: 'Stable 没有生成；当前依据不足，或模型输出被 evidence gate 拒绝。',
+    stable_not_changed: '模型没有产出新的 Stable 版本。',
+    daily_disabled: '每日画像维护已关闭。',
+    portrait_disabled: 'Portrait 引擎已关闭。',
+    missing_scope_decisions: '模型没有完成全部画像判断。'
+  };
+  var scopes = Array.isArray(data.scopes) ? data.scopes.filter(Boolean) : [];
+  var scopeText = scopes.length ? scopes.map(portraitScopeLabel).join('、') + '：' : '';
+  var message = labels[reason] || data.error || reason || '生成失败';
+  var rejected = Array.isArray(data.rejected) ? data.rejected : [];
+  if (rejected.length && !reason) {
+    var rejectedReason = String(rejected[0] && rejected[0].reason || '');
+    message = labels[rejectedReason] || ('模型输出被拒绝：' + rejectedReason);
+  }
+  return scopeText + message;
+}
+
+function portraitBlockerLabel(blocker) {
+  return {
+    generator_unavailable: '生成模型未就绪',
+    stable_locked: 'Stable 已锁定',
+    stale_evidence: '生成依据已失效',
+    insufficient_evidence: '生成依据不足'
+  }[blocker] || blocker;
+}
+
 async function loadPortraitState() {
   var content = document.getElementById('portrait-state-content');
   var summary = document.getElementById('portrait-state-summary');
@@ -4837,7 +4870,21 @@ async function runPortraitMaintain(scope) {
     });
     if (!res) return;
     var data = await res.json().catch(function() { return {}; });
-    if (!res.ok) throw new Error(data.error || '生成失败');
+    if (!res.ok) throw new Error(portraitMaintainError(data));
+    var targetScopes = scope ? [scope] : ['user', 'persona', 'relationship'];
+    var generation = data.generation || {};
+    var unchangedScopes = targetScopes.filter(function(targetScope) {
+      return generation[targetScope] && generation[targetScope].changed !== true;
+    });
+    if (unchangedScopes.length) {
+      throw new Error(portraitMaintainError({
+        reason: unchangedScopes.some(function(targetScope) {
+          return generation[targetScope] && generation[targetScope].stable_present !== true;
+        }) ? 'stable_not_generated' : 'stable_not_changed',
+        scopes: unchangedScopes,
+        rejected: data.rejected || []
+      }));
+    }
     var materials = data.materials || {};
     var rejected = Array.isArray(data.rejected) ? data.rejected.length : Number(data.rejected_count || 0);
     var parts = [
@@ -4851,6 +4898,7 @@ async function runPortraitMaintain(scope) {
     await loadPortraitState();
   } catch (e) {
     setPortraitMaintainMessage('生成失败: ' + e.message, 'error');
+    await loadPortraitState();
   }
 }
 
@@ -5002,7 +5050,7 @@ function renderPortraitScope(scope, scopeState, generationStatus) {
     meta.push('新增依据 ' + Number(generationStatus.added_since_stable || 0) + '/' + Number(generationStatus.rewrite_threshold || 10));
   }
   var blockers = generationStatus && Array.isArray(generationStatus.blockers) ? generationStatus.blockers : [];
-  blockers.forEach(function(blocker) { meta.push(blocker); });
+  blockers.forEach(function(blocker) { meta.push(portraitBlockerLabel(blocker)); });
   return '<section class="portrait-scope portrait-summary-card">' +
     '<div class="portrait-summary-head">' +
       '<h3>' + esc(portraitScopeLabel(scope)) + '</h3>' +
